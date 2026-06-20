@@ -66,7 +66,7 @@ import sys
 from fortivpn import launcher
 from fortivpn.cdp import CDPSession
 from fortivpn.controller import FortiVPN
-from fortivpn.errors import FortiError, NotRunningError
+from fortivpn.errors import CDPEvaluateError, FortiError, NotRunningError
 
 # IPsec ``ipsec_state`` value meaning "tunnel up" (docs/how-it-works.md section 2
 # / design spec 4.2). The CLI only needs the CONNECTED sentinel; the controller
@@ -184,6 +184,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=30.0,
         help="Seconds to wait for CONNECTED before giving up (default 30).",
     )
+    p_connect.add_argument(
+        "--show-window",
+        action="store_true",
+        help=(
+            "Keep FortiClient's window visible after connecting. By default the "
+            "window FortiClient pops on connect is hidden again over CDP."
+        ),
+    )
     p_connect.set_defaults(func=_cmd_connect)
 
     p_disconnect = sub.add_parser("disconnect", parents=[common], help="Disconnect a profile.")
@@ -194,6 +202,19 @@ def _build_parser() -> argparse.ArgumentParser:
         "ip", parents=[common], help="Print the current tunnel's assigned VPN IP."
     )
     p_ip.set_defaults(func=_cmd_ip)
+
+    p_hide = sub.add_parser(
+        "hide-window",
+        parents=[common],
+        help="Hide FortiClient's main window to the tray (over CDP).",
+        description=(
+            "Hide FortiClient's main window via window.forticlient.closeMainWindow(). "
+            "FortiClient pops its window on connect even under --hide-gui; this hides "
+            "it again without quitting the app. `connect` does this automatically "
+            "unless you pass --show-window."
+        ),
+    )
+    p_hide.set_defaults(func=_cmd_hide_window)
 
     p_startserver = sub.add_parser(
         "startserver",
@@ -327,6 +348,11 @@ def _cmd_connect(forti: FortiVPN, args: argparse.Namespace) -> int:
     if state.ipsec_state == _CONNECTED:
         ip = forti.connection_ip(args.profile, _IPSEC)
         vpn_ip = ip.get("vpn_ip", "")
+        # FortiClient pops its window on connect even under --hide-gui; hide it
+        # again (over CDP) unless the user asked to keep it. Only meaningful in the
+        # waited path: with --no-wait the popup happens after we return.
+        if not args.show_window:
+            _hide_window_best_effort(forti)
         report(f"Connected: {vpn_ip}")
         print(f"CONNECTED {args.profile} {vpn_ip}")
     else:
@@ -358,6 +384,33 @@ def _cmd_ip(forti: FortiVPN, args: argparse.Namespace) -> int:
         return 1
     ip = forti.connection_ip(state.name, _IPSEC)
     print(ip.get("vpn_ip", ""))
+    return 0
+
+
+def _hide_window_best_effort(forti: FortiVPN) -> None:
+    """Hide FortiClient's main window — best effort, never fails the caller.
+
+    Hiding is cosmetic (the tunnel is already up by the time this runs), so a
+    ``CDPEvaluateError`` is reported when verbose and swallowed rather than
+    propagated. See :meth:`FortiVPN.hide_window` for why the window needs hiding.
+    """
+    report("Hiding FortiClient window…")
+    try:
+        forti.hide_window()
+    except CDPEvaluateError as e:
+        # Cosmetic step; don't let it fail an otherwise-successful command.
+        report(f"(could not hide FortiClient window: {e})")
+
+
+def _cmd_hide_window(forti: FortiVPN, args: argparse.Namespace) -> int:
+    """``forti hide-window`` — hide FortiClient's main window to the tray.
+
+    For when the window is up (e.g. a connect run with ``--show-window``, or
+    FortiClient popped it itself). Unlike the best-effort hide after connect,
+    errors propagate here since hiding is this command's whole purpose.
+    """
+    forti.hide_window()
+    report("FortiClient window hidden.")
     return 0
 
 

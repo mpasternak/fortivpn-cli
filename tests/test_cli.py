@@ -33,6 +33,7 @@ import pytest
 
 from fortivpn import cli
 from fortivpn.errors import (
+    CDPEvaluateError,
     ConnectTimeout,
     FortiClientNotFoundError,
     FortiError,
@@ -127,6 +128,9 @@ class FakeController:
 
     def disconnect(self, name, ctype="ipsec"):
         return self._dispatch("disconnect", name, ctype)
+
+    def hide_window(self):
+        return self._dispatch("hide_window")
 
 
 class _FakeProfile:
@@ -284,6 +288,59 @@ def test_disconnect_routes_and_prints(capsys):
     assert disconnect_calls[0][1][0] == "office"
     out = capsys.readouterr().out.strip()
     assert out == "DISCONNECTED office"
+
+
+def test_connect_hides_window_by_default():
+    FakeController.config["connect"] = FakeState(ipsec_state=2, name="office")
+    FakeController.config["connection_ip"] = {"vpn_ip": "172.16.200.2"}
+
+    rc = cli.main(["connect", "office"])
+
+    assert rc == 0
+    names = [c[0] for c in FakeController.last.calls]
+    assert "hide_window" in names
+
+
+def test_connect_show_window_keeps_window():
+    FakeController.config["connect"] = FakeState(ipsec_state=2, name="office")
+    FakeController.config["connection_ip"] = {"vpn_ip": "172.16.200.2"}
+
+    rc = cli.main(["connect", "office", "--show-window"])
+
+    assert rc == 0
+    names = [c[0] for c in FakeController.last.calls]
+    assert "hide_window" not in names
+
+
+def test_connect_no_wait_does_not_hide_window():
+    FakeController.config["connect"] = FakeState(ipsec_state=1, name="office")
+
+    rc = cli.main(["connect", "office", "--no-wait"])
+
+    assert rc == 0
+    names = [c[0] for c in FakeController.last.calls]
+    assert "hide_window" not in names
+
+
+def test_connect_hide_failure_does_not_fail_connect(capsys):
+    # Hiding is cosmetic: a CDPEvaluateError from hide_window must not fail an
+    # otherwise-successful connect.
+    FakeController.config["connect"] = FakeState(ipsec_state=2, name="office")
+    FakeController.config["connection_ip"] = {"vpn_ip": "172.16.200.2"}
+    FakeController.config["hide_window"] = CDPEvaluateError("boom")
+
+    rc = cli.main(["connect", "office"])
+
+    assert rc == 0
+    assert "CONNECTED" in capsys.readouterr().out
+
+
+def test_hide_window_command_routes():
+    rc = cli.main(["hide-window"])
+
+    assert rc == 0
+    names = [c[0] for c in FakeController.last.calls]
+    assert "hide_window" in names
 
 
 def test_ip_connected_prints_vpn_ip(capsys):

@@ -395,3 +395,27 @@ class FortiVPN:
         :raises CDPEvaluateError: if the underlying ``evaluate`` call throws.
         """
         self._eval("window.guimessenger.CancelTunnel()")
+
+    def hide_window(self) -> None:
+        """Hide FortiClient's main window to the tray, over CDP.
+
+        Why this exists: ``--hide-gui`` only suppresses the window at startup. On a
+        successful connect the renderer calls ``focusWindow()`` — it pops the main
+        window (with the Disconnect button) — and ``--hide-gui`` does not gate that
+        path. This calls ``window.forticlient.closeMainWindow()``, a separate preload
+        bridge reachable in the same renderer world as ``window.guimessenger``. Its
+        main-process handler closes the window, and the window's ``close`` is
+        intercepted into ``hide()`` — so it goes to the tray *without quitting the
+        app* (unlike ``forticlient.quit`` → ``app.quit()``). See docs/how-it-works.md.
+
+        Tolerant by design: the expression guards on the bridge being present, so a
+        renderer without ``window.forticlient`` is a no-op rather than an error. Not
+        routed through :meth:`_eval` because ``closeMainWindow()`` resolves to
+        ``undefined`` (no JSON string to parse).
+
+        :raises CDPEvaluateError: only if ``closeMainWindow()`` itself throws.
+        """
+        self._session.evaluate(
+            "window.forticlient && window.forticlient.closeMainWindow"
+            " ? window.forticlient.closeMainWindow() : null"
+        )
