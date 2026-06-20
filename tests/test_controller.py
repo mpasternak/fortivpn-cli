@@ -16,7 +16,7 @@ What they pin down (the contract the rest of the system depends on):
 * ``state()`` parses ``getConnectionState`` and maps the enum to a label;
 * the validated connect flow — ``SetGuiHandle()`` is evaluated BEFORE
   ``ConnectTunnel`` (without that ordering the daemon never negotiates; see
-  SPIKE.md section 3), the ``ConnectTunnel`` JSON arg carries the right fields,
+  docs/how-it-works.md), the ``ConnectTunnel`` JSON arg carries the right fields,
   and the password comes from the Keychain (never an argument the test passed in
   by hand);
 * the v1 guards — ssl profile and XAUTH state both raise ``UnsupportedError``,
@@ -205,7 +205,7 @@ def test_connect_happy_path(monkeypatch, fixed_clock):
 
     assert state.state_label == "CONNECTED"
     # SetGuiHandle MUST precede ConnectTunnel — without it the daemon acks but
-    # never negotiates (SPIKE.md section 3).
+    # never negotiates (docs/how-it-works.md).
     assert _index_of(session, "SetGuiHandle") < _index_of(session, "ConnectTunnel")
     # The password came from the (monkeypatched) keychain, keyed by profile+user.
     assert keychain_calls == [("office", "alice")]

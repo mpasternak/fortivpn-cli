@@ -7,7 +7,7 @@ on:
 
 * the EXACT ``security`` argv — the ``forti-vpn-<profile>`` service-name
   convention must match the sibling AppleScript repo so pre-existing Keychain
-  items keep working (see SPIKE.md section 6);
+  items keep working (see docs/how-it-works.md);
 * whitespace handling — only the single trailing newline ``security`` appends is
   stripped, so a password that legitimately ends in spaces survives intact;
 * the error contract — a non-zero exit becomes a ``KeychainError`` whose message
