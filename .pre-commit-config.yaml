@@ -1,0 +1,10 @@
+# Ruff lint + format via the official Astral mirror. No other hooks: the project
+# is stdlib-only and keeps tooling minimal. Run `pre-commit install` yourself to
+# enable the git hook (the scaffolding intentionally does not install it).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.13.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
