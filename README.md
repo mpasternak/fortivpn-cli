@@ -10,6 +10,17 @@ renderer's own internal `window.guimessenger` API directly.
 - Python ≥ 3.11, macOS only.
 - Attach-only: the tool never starts, stops, or restarts FortiClient.
 
+> **Disclaimer.** This is an independent, unofficial project. It is **not affiliated with,
+> endorsed by, or sponsored by Fortinet, Inc.** "FortiClient" and "Fortinet" are registered
+> trademarks of Fortinet, Inc. (<https://www.fortinet.com>); they are used here only to
+> identify the software this tool interoperates with. This software is provided **"as is",
+> without warranty of any kind**: you use it **entirely at your own risk**, and the author
+> accepts **no liability** for any damage, data loss, dropped VPN connections, or other
+> losses arising from its use. It depends on FortiClient's internal, undocumented API, which
+> may change or break at any time. Ensure your use complies with your organization's policies
+> and with Fortinet's licensing terms. See [LICENSE](LICENSE) for the full warranty/liability
+> disclaimer.
+
 ---
 
 ## What it is, and why this approach
