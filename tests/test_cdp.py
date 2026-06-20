@@ -344,8 +344,43 @@ def test_close_suppresses_oserror_from_torn_down_socket():
     assert sess._sock is None
 
 
-def test_context_manager_closes_on_exit():
+_FAKE_TARGET = {"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/abc"}
+
+
+def test_enter_connects(monkeypatch):
+    # `with CDPSession() as s:` must open the connection (idiomatic CM contract).
     sock = _FakeSocket()
+    monkeypatch.setattr(cdp.CDPSession, "discover_target", lambda self: _FAKE_TARGET)
+    monkeypatch.setattr(cdp.CDPSession, "_open_websocket", lambda self, url: sock)
     with cdp.CDPSession() as sess:
-        sess._sock = sock
-    assert sock.closed is True
+        assert sess._sock is sock
+
+
+def test_connect_is_idempotent(monkeypatch):
+    calls = {"discover": 0, "open": 0}
+    sock = _FakeSocket()
+
+    def disc(self):
+        calls["discover"] += 1
+        return _FAKE_TARGET
+
+    def opn(self, url):
+        calls["open"] += 1
+        return sock
+
+    monkeypatch.setattr(cdp.CDPSession, "discover_target", disc)
+    monkeypatch.setattr(cdp.CDPSession, "_open_websocket", opn)
+    sess = cdp.CDPSession()
+    sess.connect()
+    sess.connect()  # second call must be a no-op, not a second socket
+    assert calls == {"discover": 1, "open": 1}
+    assert sess._sock is sock
+
+
+def test_context_manager_closes_on_exit(monkeypatch):
+    sock = _FakeSocket()
+    # neutralise the real connect() so __enter__ does no I/O; just verify teardown.
+    monkeypatch.setattr(cdp.CDPSession, "connect", lambda self: setattr(self, "_sock", sock))
+    with cdp.CDPSession() as sess:
+        assert sess._sock is sock  # __enter__ connected
+    assert sock.closed is True  # __exit__ closed

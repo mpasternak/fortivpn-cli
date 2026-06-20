@@ -180,9 +180,14 @@ class CDPSession:
     def connect(self) -> None:
         """Discover the renderer target and open the raw WebSocket to it.
 
+        Idempotent: returns immediately if already connected, so it is safe to
+        call both implicitly (via ``__enter__``) and explicitly.
+
         :raises NotRunningError: when FortiClient's CDP endpoint is unreachable
             or exposes no debuggable page target (see :meth:`discover_target`).
         """
+        if self._sock is not None:
+            return  # already connected; connect() is idempotent
         target = self.discover_target()
         self._sock = self._open_websocket(target["webSocketDebuggerUrl"])
 
@@ -327,6 +332,12 @@ class CDPSession:
             pass  # socket already torn down — closing a dead socket is not an error
 
     def __enter__(self) -> "CDPSession":
+        # Entering the context opens the connection — the idiomatic session
+        # contract, so `with CDPSession() as s: s.evaluate(...)` works without a
+        # separate connect() call. A real consumer (tests/manual/test_live.py)
+        # relied on this; the CLI also calls connect() explicitly, which is now a
+        # safe no-op thanks to connect()'s idempotence.
+        self.connect()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
