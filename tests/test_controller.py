@@ -88,6 +88,20 @@ def _connect_tunnel_arg(session):
     raise AssertionError("ConnectTunnel was never called")
 
 
+def _disconnect_tunnel_arg(session):
+    """Return the parsed object the controller passed to ``DisconnectTunnel``.
+
+    Same double-``json.loads`` unwrapping as :func:`_connect_tunnel_arg` (JS string
+    literal → JSON string → object); used to assert *which* profile was torn down.
+    """
+    for call in session.calls:
+        if call.startswith("window.guimessenger.DisconnectTunnel("):
+            inner = call[len("window.guimessenger.DisconnectTunnel(") : -1]
+            js_literal = json.loads(inner)  # JS string literal -> the JSON string
+            return json.loads(js_literal)  # the JSON string -> the object
+    raise AssertionError("DisconnectTunnel was never called")
+
+
 def _called(session, needle):
     """True if any evaluated expression contains ``needle``."""
     return any(needle in call for call in session.calls)
@@ -317,8 +331,10 @@ def test_connect_drop_to_zero_after_activity_is_connect_failed(monkeypatch, fixe
             "window.guimessenger.GetVPNConnectionList()": json.dumps(profiles),
             "window.guimessenger.SetGuiHandle()": json.dumps(True),
             "window.guimessenger.ConnectTunnel(": json.dumps(["1"]),
-            # First poll: CONNECTING (1); then it drops back to DISCONNECTED (0).
+            # Up-front read (nothing active → no preemptive disconnect); then the
+            # first poll is CONNECTING (1) and it drops back to DISCONNECTED (0).
             "window.guimessenger.getConnectionState()": [
+                json.dumps({"ipsec_state": 0, "ssl_state": 0, "connection_name": ""}),
                 json.dumps({"ipsec_state": 1, "ssl_state": 0, "connection_name": "office"}),
                 json.dumps({"ipsec_state": 0, "ssl_state": 0, "connection_name": "office"}),
             ],
@@ -349,6 +365,124 @@ def test_connect_never_leaves_zero_times_out(monkeypatch, fixed_clock):
         # fixed_clock advances monotonic by 1s per call, so a 3s timeout elapses
         # after a couple of polls — instantly, with no real sleeping.
         FortiVPN(session).connect("office", username="u", timeout=3.0)
+
+
+# connect() one-tunnel-at-a-time --------------------------------------------
+
+
+def test_connect_disconnects_other_active_profile_first(monkeypatch, fixed_clock):
+    # FortiClient holds at most one tunnel at a time: connecting "office" while
+    # "apoz" is up must tear "apoz" down FIRST, otherwise the new ConnectTunnel is
+    # silently rejected (the daemon stays pinned on the old tunnel).
+    profiles = [
+        {"connection_name": "apoz", "type": "ipsec"},
+        {"connection_name": "office", "type": "ipsec"},
+    ]
+    session = FakeSession(
+        {
+            "window.guimessenger.GetVPNConnectionList()": json.dumps(profiles),
+            "window.guimessenger.GetIPSecGeneralInfo(": json.dumps({"username": "alice"}),
+            "window.guimessenger.SetGuiHandle()": json.dumps(True),
+            "window.guimessenger.DisconnectTunnel(": json.dumps(["1"]),
+            "window.guimessenger.ConnectTunnel(": json.dumps(["1"]),
+            "window.guimessenger.getConnectionState()": [
+                # 1) up-front read: a DIFFERENT profile is currently active.
+                json.dumps({"ipsec_state": 2, "ssl_state": 0, "connection_name": "apoz"}),
+                # 2) wait-for-disconnect: the daemon has torn it down.
+                json.dumps({"ipsec_state": 0, "ssl_state": 0, "connection_name": "apoz"}),
+                # 3) wait-for-connect: the new tunnel comes up.
+                json.dumps({"ipsec_state": 2, "ssl_state": 0, "connection_name": "office"}),
+            ],
+        }
+    )
+    monkeypatch.setattr(controller_module.keychain, "get_password", lambda *_a, **_k: "pw")
+
+    state = FortiVPN(session).connect("office")
+
+    assert state.state_label == "CONNECTED"
+    assert state.name == "office"
+    # The old tunnel was disconnected BEFORE the new connect sequence began.
+    assert _index_of(session, "DisconnectTunnel") < _index_of(session, "SetGuiHandle")
+    assert _index_of(session, "SetGuiHandle") < _index_of(session, "ConnectTunnel")
+    # And it tore down the previously-active profile, not the one being connected.
+    assert _disconnect_tunnel_arg(session)["connection_name"] == "apoz"
+
+
+def test_connect_same_active_profile_is_not_disconnected(monkeypatch, fixed_clock):
+    # Connecting the profile that is ALREADY active must not tear it down first —
+    # the one-tunnel rule only preempts a *different* connection.
+    profiles = [{"connection_name": "office", "type": "ipsec"}]
+    session = FakeSession(
+        {
+            "window.guimessenger.GetVPNConnectionList()": json.dumps(profiles),
+            "window.guimessenger.GetIPSecGeneralInfo(": json.dumps({"username": "alice"}),
+            "window.guimessenger.SetGuiHandle()": json.dumps(True),
+            "window.guimessenger.ConnectTunnel(": json.dumps(["1"]),
+            "window.guimessenger.getConnectionState()": json.dumps(
+                {"ipsec_state": 2, "ssl_state": 0, "connection_name": "office"}
+            ),
+        }
+    )
+    monkeypatch.setattr(controller_module.keychain, "get_password", lambda *_a, **_k: "pw")
+
+    FortiVPN(session).connect("office")
+
+    # No DisconnectTunnel response is even scripted: calling it would blow up the
+    # fake. The assertion makes the intent explicit regardless.
+    assert not _called(session, "DisconnectTunnel")
+
+
+def test_connect_from_disconnected_does_not_disconnect(monkeypatch, fixed_clock):
+    # Nothing active → no preemptive disconnect, just the normal connect flow.
+    profiles = [{"connection_name": "office", "type": "ipsec"}]
+    session = FakeSession(
+        {
+            "window.guimessenger.GetVPNConnectionList()": json.dumps(profiles),
+            "window.guimessenger.GetIPSecGeneralInfo(": json.dumps({"username": "alice"}),
+            "window.guimessenger.SetGuiHandle()": json.dumps(True),
+            "window.guimessenger.ConnectTunnel(": json.dumps(["1"]),
+            "window.guimessenger.getConnectionState()": [
+                json.dumps({"ipsec_state": 0, "ssl_state": 0, "connection_name": ""}),
+                json.dumps({"ipsec_state": 2, "ssl_state": 0, "connection_name": "office"}),
+            ],
+        }
+    )
+    monkeypatch.setattr(controller_module.keychain, "get_password", lambda *_a, **_k: "pw")
+
+    state = FortiVPN(session).connect("office")
+
+    assert state.state_label == "CONNECTED"
+    assert not _called(session, "DisconnectTunnel")
+
+
+def test_connect_previous_tunnel_never_disconnects_raises(monkeypatch, fixed_clock):
+    # The active OTHER tunnel refuses to go down: we must NOT fire the new connect
+    # (it would just be rejected) and must fail loudly instead.
+    profiles = [
+        {"connection_name": "apoz", "type": "ipsec"},
+        {"connection_name": "office", "type": "ipsec"},
+    ]
+    session = FakeSession(
+        {
+            "window.guimessenger.GetVPNConnectionList()": json.dumps(profiles),
+            "window.guimessenger.GetIPSecGeneralInfo(": json.dumps({"username": "alice"}),
+            "window.guimessenger.SetGuiHandle()": json.dumps(True),
+            "window.guimessenger.DisconnectTunnel(": json.dumps(["1"]),
+            "window.guimessenger.ConnectTunnel(": json.dumps(["1"]),
+            # The previously-active tunnel never leaves CONNECTED.
+            "window.guimessenger.getConnectionState()": json.dumps(
+                {"ipsec_state": 2, "ssl_state": 0, "connection_name": "apoz"}
+            ),
+        }
+    )
+    monkeypatch.setattr(controller_module.keychain, "get_password", lambda *_a, **_k: "pw")
+
+    with pytest.raises(ConnectFailed):
+        FortiVPN(session).connect("office", timeout=3.0)
+
+    # The new tunnel must never be attempted while the old one is still up.
+    assert not _called(session, "ConnectTunnel")
+    assert not _called(session, "SetGuiHandle")
 
 
 # disconnect() / cancel() ----------------------------------------------------

@@ -252,6 +252,11 @@ class FortiVPN:
            daemon (SSL is out of scope for v1).
         2. ``username`` ← the argument, else ``profile_info(name)["username"]``.
         3. ``password`` ← the argument, else ``keychain.get_password(name, username)``.
+        3a. One-tunnel-at-a-time preemption: read :meth:`state`; if a *different*
+           profile is currently active (any non-DISCONNECTED state), :meth:`disconnect`
+           it and wait for the daemon to report DISCONNECTED. FortiClient holds at
+           most one tunnel, so without this the new ``ConnectTunnel`` is silently
+           rejected. Connecting the already-active profile skips this (no teardown).
         4. ``SetGuiHandle()`` — evaluated **before** ``ConnectTunnel`` because the
            daemon will not negotiate without it (module docstring).
         5. ``ConnectTunnel(JSON.stringify({...}))`` with the validated field set.
@@ -274,7 +279,8 @@ class FortiVPN:
         :returns: the terminal :class:`ConnectionState` (CONNECTED on success, or
             the immediate state when ``wait=False``).
         :raises UnsupportedError: ssl profile, or the daemon enters XAUTH (2FA).
-        :raises ConnectFailed: the tunnel negotiated then dropped to disconnected.
+        :raises ConnectFailed: the tunnel negotiated then dropped to disconnected,
+            or a previously-active *other* tunnel did not disconnect in time (step 3a).
         :raises ConnectTimeout: the tunnel did not reach CONNECTED within ``timeout``
             (including never leaving DISCONNECTED).
         :raises KeychainError: the password is needed but the Keychain lookup fails.
@@ -292,6 +298,17 @@ class FortiVPN:
             username = self.profile_info(name)["username"]
         if password is None:
             password = keychain.get_password(name, username)
+
+        # 3a. FortiClient holds at most ONE tunnel at a time. If a DIFFERENT
+        #     profile is currently active (CONNECTED/CONNECTING/RECONNECTING/
+        #     XAUTH), tear it down and wait for DISCONNECTED before issuing the new
+        #     ConnectTunnel — fired while the old tunnel is still up, the new
+        #     connect is silently rejected (the daemon stays pinned on the existing
+        #     tunnel). A same-profile reconnect is left to the normal flow below.
+        current = self.state()
+        if current.ipsec_state != _DISCONNECTED and current.name and current.name != name:
+            self.disconnect(current.name)
+            self._wait_for_disconnect(timeout=timeout, poll=poll)
 
         # 4. Register the GUI handle FIRST — load-bearing ordering (module docstring).
         self._session.evaluate("window.guimessenger.SetGuiHandle()")
@@ -372,6 +389,34 @@ class FortiVPN:
                 raise ConnectTimeout(
                     f"Tunnel did not reach CONNECTED within {timeout:g}s "
                     f"(last ipsec_state={ipsec_state})."
+                )
+            time.sleep(poll)
+
+    def _wait_for_disconnect(self, *, timeout: float, poll: float) -> None:
+        """Poll :meth:`state` until the daemon reports DISCONNECTED, or fail.
+
+        Used by :meth:`connect` to enforce FortiClient's one-tunnel-at-a-time
+        rule: after :meth:`disconnect`-ing a previously-active *other* profile we
+        must wait for the daemon to actually tear it down before issuing the new
+        ``ConnectTunnel`` (fired too early — while the old tunnel is still up — the
+        new connect is silently rejected). Mirrors :meth:`_wait_for_connection`'s
+        ``time.monotonic`` deadline / ``time.sleep`` structure so the same test
+        clock seam drives it. ``timeout`` reuses :meth:`connect`'s value as a
+        generous upper bound; a clean disconnect normally returns on the first poll.
+
+        :raises ConnectFailed: the previous tunnel did not disconnect within
+            ``timeout`` — starting the new connect now would just be rejected, so
+            we fail loudly instead of issuing a connect that cannot succeed.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            if self.state().ipsec_state == _DISCONNECTED:
+                return
+            if time.monotonic() >= deadline:
+                raise ConnectFailed(
+                    f"A previously active tunnel did not disconnect within {timeout:g}s; "
+                    f"refusing to start a new connect (FortiClient allows only one "
+                    f"tunnel at a time)."
                 )
             time.sleep(poll)
 
