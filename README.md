@@ -8,7 +8,9 @@ handy for scripts, automation, and headless or over-SSH use. It works with a For
 already have running, talking to it over a local debugging port.
 
 - Zero runtime dependencies (Python standard library only).
-- Python ≥ 3.11, macOS only.
+- **macOS only** (Python ≥ 3.11). There is **no Windows support** — it drives the
+  macOS FortiClient.app, so `pip` / `uv` / `uvx` deliberately **refuse to install on
+  Windows**, and running it from a source checkout there exits with a clear error.
 - Attach-only by default: commands attach to a running FortiClient; the one explicit
   exception is `fvpnctl startserver`, an opt-in launcher you invoke yourself.
 
@@ -90,7 +92,10 @@ uv tool install .       # install the `fvpnctl` command from the local tree
 uv run fvpnctl list       # or run it in place, without installing
 ```
 
-Requirements: macOS, Python ≥ 3.11.
+Requirements: macOS, Python ≥ 3.11. **Windows is not supported** — installation on
+Windows fails on purpose (the package declares an unsatisfiable `win32` requirement),
+and there is no Linux support for the runtime either (the CLI talks to macOS
+FortiClient.app). Linux is used only by CI to run the mocked test suite.
 
 ---
 

@@ -1,28 +1,28 @@
 version = 1
 revision = 3
 requires-python = ">=3.11"
-
-[[package]]
-name = "colorama"
-version = "0.4.6"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44", size = 27697, upload-time = "2022-10-25T02:36:22.414Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
+resolution-markers = [
+    "sys_platform == 'darwin'",
+    "sys_platform == 'linux'",
+]
+supported-markers = [
+    "sys_platform == 'darwin'",
+    "sys_platform == 'linux'",
 ]
 
 [[package]]
 name = "fvpnctl"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 
 [package.dev-dependencies]
 dev = [
-    { name = "pytest" },
-    { name = "ruff" },
+    { name = "pytest", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "ruff", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 
 [package.metadata]
+requires-dist = [{ name = "fvpnctl-is-macos-only-see-readme", marker = "sys_platform == 'win32'" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -71,11 +71,10 @@ name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32'" },
-    { name = "iniconfig" },
-    { name = "packaging" },
-    { name = "pluggy" },
-    { name = "pygments" },
+    { name = "iniconfig", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "packaging", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "pluggy", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
+    { name = "pygments", marker = "sys_platform == 'darwin' or sys_platform == 'linux'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa3c9d3fe98a76a1d14c74a9e266d397cf6eb64be5e01/pytest-9.1.1.tar.gz", hash = "sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313", size = 1636369, upload-time = "2026-06-19T10:58:32.857Z" }
 wheels = [
@@ -102,7 +101,4 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f5/d1/5cf5909329fedb5d39d555ee818ba5cf4638e1a301b89785d34f2905bfcb/ruff-0.15.18-py3-none-musllinux_1_2_armv7l.whl", hash = "sha256:a81beadbbff2c9c245561ae3f77b16709d87f35eec650d0501679239d3449b22", size = 10693187, upload-time = "2026-06-18T18:25:08.245Z" },
     { url = "https://files.pythonhosted.org/packages/fd/44/ff6c635cf2c4f4e7b618b6640da057376baa36014695487d88aed4794268/ruff-0.15.18-py3-none-musllinux_1_2_i686.whl", hash = "sha256:2186d9e940ae332ab293623a75b5f4fe49565f449954d50a72a046683aa6b809", size = 11208721, upload-time = "2026-06-18T18:25:41.327Z" },
     { url = "https://files.pythonhosted.org/packages/88/d9/5baa2a30861adfb7022cf33c1e35b2fc18085b08c16f83eff4c7b99a5f48/ruff-0.15.18-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:5c2abf140438032bc77b2284a6c9944ecd8a19e5f1c7b52b1b8e4a0a80d19a7a", size = 11678599, upload-time = "2026-06-18T18:25:13.607Z" },
-    { url = "https://files.pythonhosted.org/packages/c3/1a/0725a7cfdc32ff769efb96ee782bec882e16448c5d9e3be947ec4c04ce27/ruff-0.15.18-py3-none-win32.whl", hash = "sha256:02299e6e9fa5b297a3f6d5d10d7bcd655c925b028bb8b9d4588214549c6b9ec4", size = 10901903, upload-time = "2026-06-18T18:25:24.755Z" },
-    { url = "https://files.pythonhosted.org/packages/f3/51/805d9f6fb7970505c3504794a5ec350f605361b807fef4dcf214ebd35e72/ruff-0.15.18-py3-none-win_amd64.whl", hash = "sha256:dac80dc8d26b2257dbefabed62f5d255c3937b4ccb122da1fc634794fa3578b3", size = 12041189, upload-time = "2026-06-18T18:25:17.915Z" },
-    { url = "https://files.pythonhosted.org/packages/29/4c/67bb45e41609eb4726f1bfeb59e083cf91d14c696d4bd14c234a980be93d/ruff-0.15.18-py3-none-win_arm64.whl", hash = "sha256:b2c9257fcbd4a3e5b977a1904e6facca016bafe2edc17df24db67cfaee03b4e4", size = 11329958, upload-time = "2026-06-18T18:25:43.686Z" },
 ]

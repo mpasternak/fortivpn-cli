@@ -1,6 +1,6 @@
 [project]
 name = "fvpnctl"
-version = "0.2.0"
+version = "0.2.1"
 requires-python = ">=3.11"
 readme = "README.md"
 description = "Control your FortiClient VPN from the macOS command line."
@@ -19,11 +19,22 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: System :: Networking",
 ]
-# Zero runtime dependencies is a hard design requirement: the tool uses only the
-# Python standard library (socket, json, urllib, subprocess, argparse). See the
-# design spec sections 2 and 8 for the rationale (no third-party attack surface,
-# trivially auditable, runs against any stock Python 3.11+).
-dependencies = []
+# Zero runtime dependencies is a hard design requirement on supported platforms:
+# the tool uses only the Python standard library (socket, json, urllib,
+# subprocess, argparse). See the design spec sections 2 and 8 for the rationale
+# (no third-party attack surface, trivially auditable, runs against any stock
+# Python 3.11+).
+#
+# The single entry below is NOT a real dependency. fvpnctl is macOS-only (it
+# drives the FortiClient.app debug port) and has no Windows support, so this is an
+# intentionally unsatisfiable requirement gated to win32: on Windows pip/uv/uvx
+# fail fast with a clear "no matching distribution" error instead of installing
+# something that cannot work. On macOS — and on Linux, where CI runs the
+# platform-agnostic mocked test suite — the marker is false, so the dependency set
+# stays empty.
+dependencies = [
+    "fvpnctl-is-macos-only-see-readme; sys_platform == 'win32'",
+]
 
 [project.urls]
 Homepage = "https://github.com/mpasternak/fortivpn-cli"
@@ -44,6 +55,13 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fvpnctl"]
+
+[tool.uv]
+# fvpnctl is macOS-only; CI additionally resolves on Linux to run the mocked,
+# platform-agnostic test suite. Restrict universal locking to these so `uv lock`
+# does not try (and fail) to resolve the intentionally-unsatisfiable win32 install
+# guard declared in [project].dependencies.
+environments = ["sys_platform == 'darwin'", "sys_platform == 'linux'"]
 
 [tool.ruff]
 line-length = 100

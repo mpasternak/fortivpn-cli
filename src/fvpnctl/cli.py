@@ -479,6 +479,16 @@ def main(argv: list[str] | None = None) -> int:
     """
     global _VERBOSE
 
+    if sys.platform == "win32":
+        # fvpnctl drives the macOS FortiClient.app debug port; there is no Windows
+        # support. The packaging metadata already refuses to *install* on win32
+        # (see pyproject.toml), but a source checkout run via `python -m` / `uv run`
+        # can still reach here — fail fast with a clear message instead of a
+        # confusing "FortiClient not found" later. (win32-only so the Linux CI that
+        # runs the mocked test suite via main() is unaffected.)
+        print("fvpnctl is macOS-only and has no Windows support.", file=sys.stderr)
+        return 1
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 
