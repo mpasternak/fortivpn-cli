@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Minimal token scope: this workflow only reads the repo to run tests.
+permissions:
+  contents: read
+
 jobs:
   test:
     # The unit suite is platform-agnostic: it mocks `subprocess`/sockets and the
