@@ -3,8 +3,8 @@
 [![CI](https://github.com/mpasternak/fortivpn-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/mpasternak/fortivpn-cli/actions/workflows/ci.yml)
 
 A small command-line tool (`fvpnctl`) and Python library for **connecting, disconnecting,
-and checking the status of FortiClient VPN profiles from the terminal** — handy for scripts,
-automation, and headless or over-SSH use. It works with a FortiClient you
+checking, and live-monitoring the status of FortiClient VPN profiles from the terminal** —
+handy for scripts, automation, and headless or over-SSH use. It works with a FortiClient you
 already have running, talking to it over a local debugging port.
 
 - Zero runtime dependencies (Python standard library only).
@@ -232,6 +232,49 @@ DISCONNECTED
 ```console
 $ fvpnctl status --json
 {"ipsec_state": 2, "ssl_state": 0, "connection_name": "office", ...}
+```
+
+### `fvpnctl monitor [-n S]`
+
+Live-watch the tunnel and **exit `0` the moment it disconnects** — the moving-picture companion
+to `status`. Instead of raw cumulative byte counters, it derives **throughput rates** from the
+deltas between polls and redraws in place. It adapts to where it is writing:
+
+- **a wide terminal** → a boxed, colored dashboard with live rates and a throughput sparkline;
+- **a narrow terminal** → a single refreshing status line;
+- **a pipe / redirect** (not a TTY) → one plain status line per poll, so the stream stays
+  greppable and loggable.
+
+```console
+$ fvpnctl monitor
+┌─ fvpnctl monitor ────────────────────────────────┐
+│  ● CONNECTED   apoz                              │
+│                                                  │
+│    IP        10.10.115.1                         │
+│    Uptime    00:10:54                            │
+│    Down   ↓    12.3 KB/s   total 764.2 KB        │
+│    Up     ↑     4.1 KB/s   total 863.1 KB        │
+│                                                  │
+│    ▁▂▃▃▆▅▄▃▂▁▂▃▆█▇▅  throughput                   │
+└──────────────────────────────────────────────────┘
+  polling every 2s · Ctrl-C to quit
+```
+
+The status dot is green when CONNECTED, yellow while CONNECTING/RECONNECTING, red when down.
+Color is disabled automatically when output is not a terminal or when `NO_COLOR` is set.
+
+Options:
+
+- `-n S` / `--interval S` — seconds between polls (default `2`).
+
+Because it exits cleanly on disconnect, it composes in shell: `fvpnctl monitor && say "VPN dropped"`.
+Piped, it doubles as a logger:
+
+```console
+$ fvpnctl monitor | tee vpn.log
+CONNECTED apoz 10.10.115.1 (00:10:54, in=782548 out=883792, ↓12.3 KB/s ↑4.1 KB/s)
+...
+DISCONNECTED
 ```
 
 ### `fvpnctl connect <profile> [-u USER] [--no-wait] [--timeout S]`

@@ -63,7 +63,7 @@ import json
 import os
 import sys
 
-from fvpnctl import launcher
+from fvpnctl import launcher, monitor
 from fvpnctl.cdp import CDPSession
 from fvpnctl.controller import FortiVPN
 from fvpnctl.errors import CDPEvaluateError, FortiError, NotRunningError
@@ -164,6 +164,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="Emit the merged state as a JSON object."
     )
     p_status.set_defaults(func=_cmd_status)
+
+    p_monitor = sub.add_parser(
+        "monitor",
+        parents=[common],
+        help="Live-watch the tunnel and exit when it disconnects.",
+        description=(
+            "Continuously poll the tunnel and render a live status view (a colored "
+            "dashboard with throughput rates and a sparkline on a wide terminal; a "
+            "single refreshing line on a narrow one; plain appended lines when piped). "
+            "Exits 0 the moment the tunnel disconnects."
+        ),
+    )
+    p_monitor.add_argument(
+        "-n",
+        "--interval",
+        type=float,
+        default=2.0,
+        help="Seconds between polls (default 2).",
+    )
+    p_monitor.set_defaults(func=_cmd_monitor)
 
     p_connect = sub.add_parser("connect", parents=[common], help="Connect an IPsec profile.")
     p_connect.add_argument("profile", help="The profile (connection_name) to connect.")
@@ -321,6 +341,19 @@ def _cmd_status(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
     # e.g. "CONNECTED office 172.16.200.2 (00:01:45, in=1616 out=0)"
     print(f"{state.state_label} {name} {vpn_ip} ({duration}, in={traffic_in} out={traffic_out})")
     return 0
+
+
+def _cmd_monitor(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
+    """``fvpnctl monitor`` — hand off to the live-monitor poll/render loop.
+
+    Delegates to :func:`monitor.run`, which polls ``state()`` (enriched with
+    ``connection_info``/``connection_ip`` while CONNECTED) every ``--interval``
+    seconds and returns 0 when the tunnel disconnects. ``monitor`` is referenced
+    via the module global so tests can monkeypatch ``cli.monitor``. A
+    ``CDPEvaluateError`` from inside the loop (FortiClient quitting mid-watch)
+    propagates to ``main``'s handler like any other ``FortiError``.
+    """
+    return monitor.run(fvpnctl, interval=args.interval)
 
 
 def _cmd_connect(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:

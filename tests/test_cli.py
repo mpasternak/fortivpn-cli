@@ -217,6 +217,59 @@ def test_status_disconnected(capsys):
     assert names == ["state"]
 
 
+def test_monitor_routes_to_monitor_run(monkeypatch):
+    """``monitor`` delegates to ``monitor.run(fvpnctl, interval=...)``.
+
+    The real poll/render loop is tested in ``test_monitor.py``; here we only pin
+    that the subcommand wires the controller and the default interval through,
+    patching ``cli.monitor`` so nothing actually loops.
+    """
+    calls = {}
+
+    def fake_run(fvpnctl, *, interval, stream=None):
+        calls["fvpnctl"] = fvpnctl
+        calls["interval"] = interval
+        return 0
+
+    monkeypatch.setattr(cli.monitor, "run", fake_run)
+
+    rc = cli.main(["monitor"])
+
+    assert rc == 0
+    assert calls["interval"] == 2.0
+    # It received the FortiVPN built around the (fake) session.
+    assert calls["fvpnctl"] is FakeController.last
+
+
+def test_monitor_interval_flag_is_threaded(monkeypatch):
+    captured = {}
+
+    def fake_run(fvpnctl, *, interval, stream=None):
+        captured["interval"] = interval
+        return 0
+
+    monkeypatch.setattr(cli.monitor, "run", fake_run)
+
+    rc = cli.main(["monitor", "-n", "0.5"])
+
+    assert rc == 0
+    assert captured["interval"] == 0.5
+
+
+def test_monitor_error_maps_to_exit_code(monkeypatch, capsys):
+    """A ``CDPEvaluateError`` escaping the loop maps to its exit code (6)."""
+
+    def boom(fvpnctl, *, interval, stream=None):
+        raise CDPEvaluateError("FortiClient quit mid-watch")
+
+    monkeypatch.setattr(cli.monitor, "run", boom)
+
+    rc = cli.main(["monitor"])
+
+    assert rc == 6
+    assert capsys.readouterr().err.strip() != ""
+
+
 def test_connect_routes_with_exact_args(capsys):
     FakeController.config["connect"] = FakeState(ipsec_state=2, name="office")
     FakeController.config["connection_ip"] = {"vpn_ip": "172.16.200.2"}
