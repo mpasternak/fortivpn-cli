@@ -101,9 +101,10 @@ class FortiVPN:
 4. `SetGuiHandle()` (assert truthy).
 5. `ConnectTunnel(JSON.stringify({connection_name, connection_type:"ipsec", username,
    password, save_password:"0", always_up:"0", auto_connect:"0", saml_error:1}))`.
-6. If `wait`: poll `state()` until `ipsec_state==2` (→ return), `==3` (XAUTH) →
-   `UnsupportedError("2FA not supported in v1")`, or back to `0` after activity →
-   `ConnectFailed`; on timeout → `ConnectTimeout`.
+6. If `wait`: poll `state()` every `poll`s until `ipsec_state==2` (→ return);
+   `==3` (XAUTH) → `UnsupportedError("2FA not supported in v1")`; dropped back to `0`
+   *after* having reached a non-zero state → `ConnectFailed`; if `timeout` elapses
+   first — **including the state never leaving `0`** (silent rejection) → `ConnectTimeout`.
    The password is held only in a local; never logged.
 
 ### 4.3 `keychain.py`
@@ -132,7 +133,7 @@ the mapped code. No silent excepts; suppression only with a narrow type + commen
 | `forti status` | `state()`; if connected, derive `connection_name`/`type` from it and add `connection_info`/`connection_ip` | `CONNECTED office 172.16.200.2 (00:01:45, ↓1.6KB ↑0)` or `DISCONNECTED` | state dict |
 | `forti connect <profile> [-u USER] [--no-wait] [--timeout S]` | `connect()` | progress line(s) → `CONNECTED <profile> <vpn_ip>` | — |
 | `forti disconnect <profile>` | `disconnect()` | `DISCONNECTED <profile>` | — |
-| `forti ip` | read `state()`; if `ipsec_state==2`, `connection_ip(name, "ipsec")` using that state's `connection_name`; else exit non-zero with "not connected" | `172.16.200.2` | — |
+| `forti ip` | read `state()`; if `ipsec_state==2`, `connection_ip(name, "ipsec")` using that state's `connection_name`; else exit `1` with "not connected" on stderr | `172.16.200.2` | — |
 
 ### Exit codes
 `0` success · `2` usage (argparse) · `3` `NotRunningError` · `4` `KeychainError` ·
@@ -176,7 +177,27 @@ fortivpn-cli-via-rdp/
 - Tooling: uv + `pyproject.toml`, ruff (lint+format), pre-commit, pytest, Python 3.11+.
 - **Zero runtime dependencies** (`socket`, `json`, `urllib`, `subprocess`, `argparse`).
 
-## 9. Future / deferred
+## 9. Documentation (how **and** why)
+
+Documentation is a first-class deliverable, not an afterthought. Every artifact must
+explain **how** it works *and* **why** it is built that way — rationale, not just usage.
+
+- **README.md** — what the tool does and **why this approach** (CDP/attach-only, no GUI
+  automation; why FortiClient must run headless + `--remote-debugging-port`); setup
+  **how-to** (sample LaunchAgent plist, adding the `forti-vpn-<profile>` Keychain item);
+  per-command usage; the security note (credentials never logged / not in argv/env);
+  links to `SPIKE.md` as the "why it works" reference.
+- **Module docstrings** — each module opens with a docstring covering its purpose, how
+  it works, and the *why* behind non-obvious choices: `cdp.py` (raw-WebSocket because
+  node v20 lacks a global `WebSocket`), `controller.py` (**why `SetGuiHandle()` must
+  precede `ConnectTunnel`** — daemon won't negotiate otherwise), the JSON-arg
+  requirement for `getConnectionIP`/`getConnectionInfo`/`GetIPSecGeneralInfo`.
+- **Inline comments** — for every empirically-derived constant or ordering that a reader
+  couldn't infer from the code alone, with a one-line "why" (and a pointer to `SPIKE.md`).
+- **Docstrings on public functions/classes** — describe contract, returns, and raised
+  errors.
+
+## 10. Future / deferred
 
 SSL VPN support; interactive 2FA (XAUTH state + `token`/`SendToken`, needs an attended
 test on a 2FA profile); default-profile config; profile management commands. Each is a
