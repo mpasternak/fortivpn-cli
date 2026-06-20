@@ -2,8 +2,9 @@
 
 **Date:** 2026-06-20
 **Status:** Approved (brainstorming)
-**Validated foundation:** see [`SPIKE.md`](../../../SPIKE.md) — the control path below was
-exercised empirically on a live tunnel (FortiClient 7.4.3.4323, macOS).
+**Validated foundation:** see [`docs/how-it-works.md`](../../how-it-works.md) — the
+control path below was exercised empirically on a live tunnel (FortiClient 7.4.3.4323,
+macOS).
 
 ## 1. Goal
 
@@ -16,16 +17,19 @@ DevTools Protocol (CDP). Separate project from the AppleScript/AX variant
 ## 2. Scope
 
 ### In scope (v1)
-- **Attach-only** CDP client: connects to an already-running FortiClient that was
-  launched with `--remote-debugging-port`. The tool never starts, stops, or restarts
-  FortiClient.
+- **Attach-only by default** CDP client: connects to an already-running FortiClient
+  launched with `--remote-debugging-port`. The only command that launches FortiClient is
+  the explicit `startserver`; commands never auto-start, quit, or restart it.
 - IPsec profiles with credentials in the login Keychain, **no 2FA** (the validated case).
-- Commands: `list`, `status`, `connect`, `disconnect`, `ip`.
+- Commands: `list`, `status`, `connect`, `disconnect`, `ip`, `startserver`.
+- Verbose progress on stderr by default (`--quiet` silences); stdout stays machine-readable.
+- FortiClient app detection (powers `startserver` and the actionable not-running guidance).
 - Zero runtime dependencies (Python stdlib only).
 
 ### Out of scope (v1) — explicit non-goals
-- **Lifecycle management / autostart.** No `setup`/`up`/`down`, no LaunchAgent command.
-  README ships a sample LaunchAgent plist for the user to install manually.
+- **Automatic lifecycle management.** `startserver` launches FortiClient on explicit
+  request, but nothing auto-starts it and the tool never quits or restarts a *running*
+  FortiClient. README also ships a LaunchAgent plist for permanent setups.
 - **SSL VPN.** Untested in the spike; `connect` on an `ssl` profile raises
   `UnsupportedError`.
 - **2FA / token / OTP.** If the daemon enters the `XAUTH` state, `connect` raises
@@ -138,7 +142,7 @@ the mapped code. No silent excepts; suppression only with a narrow type + commen
 ### Exit codes
 `0` success · `2` usage (argparse) · `3` `NotRunningError` · `4` `KeychainError` ·
 `5` `UnsupportedError` · `6` `ConnectFailed` / `CDPEvaluateError` · `7` `ConnectTimeout` ·
-`1` any other `FortiError`.
+`8` `FortiClientNotFoundError` · `1` any other `FortiError`.
 
 ## 6. Error handling policy
 
@@ -167,11 +171,11 @@ ignoring `OSError` on socket close during teardown).
 fortivpn-cli-via-rdp/
   pyproject.toml          # uv-managed; project.scripts: forti = "fortivpn.cli:main"
   README.md               # usage + sample LaunchAgent plist (headless+debug autostart)
-  SPIKE.md                # validated findings (exists)
   .pre-commit-config.yaml # ruff (lint+format)
   src/fortivpn/{__init__,cdp,controller,keychain,errors,cli}.py
   tests/{test_cdp,test_controller,test_keychain,test_cli}.py
   tests/manual/           # attended live tests, skipped by default
+  docs/how-it-works.md    # validated control path / "why it works"
   docs/superpowers/specs/2026-06-20-fortivpn-cli-via-cdp-design.md
 ```
 - Tooling: uv + `pyproject.toml`, ruff (lint+format), pre-commit, pytest, Python 3.11+.
@@ -186,14 +190,15 @@ explain **how** it works *and* **why** it is built that way — rationale, not j
   automation; why FortiClient must run headless + `--remote-debugging-port`); setup
   **how-to** (sample LaunchAgent plist, adding the `forti-vpn-<profile>` Keychain item);
   per-command usage; the security note (credentials never logged / not in argv/env);
-  links to `SPIKE.md` as the "why it works" reference.
+  links to `docs/how-it-works.md` as the "why it works" reference.
 - **Module docstrings** — each module opens with a docstring covering its purpose, how
   it works, and the *why* behind non-obvious choices: `cdp.py` (raw-WebSocket because
   node v20 lacks a global `WebSocket`), `controller.py` (**why `SetGuiHandle()` must
   precede `ConnectTunnel`** — daemon won't negotiate otherwise), the JSON-arg
   requirement for `getConnectionIP`/`getConnectionInfo`/`GetIPSecGeneralInfo`.
 - **Inline comments** — for every empirically-derived constant or ordering that a reader
-  couldn't infer from the code alone, with a one-line "why" (and a pointer to `SPIKE.md`).
+  couldn't infer from the code alone, with a one-line "why" (and a pointer to
+  `docs/how-it-works.md`).
 - **Docstrings on public functions/classes** — describe contract, returns, and raised
   errors.
 

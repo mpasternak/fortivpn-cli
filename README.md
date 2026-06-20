@@ -10,7 +10,8 @@ renderer's own internal `window.guimessenger` API directly.
 
 - Zero runtime dependencies (Python standard library only).
 - Python ≥ 3.11, macOS only.
-- Attach-only: the tool never starts, stops, or restarts FortiClient.
+- Attach-only by default: commands attach to a running FortiClient; the one explicit
+  exception is `forti startserver`, an opt-in launcher you invoke yourself.
 
 > **Disclaimer.** This is an independent, unofficial project. It is **not affiliated with,
 > endorsed by, or sponsored by Fortinet, Inc.** "FortiClient" and "Fortinet" are registered
@@ -52,7 +53,8 @@ Driving `window.guimessenger` over CDP avoids all of that:
   so it works over SSH and in unattended scripts.
 
 This control path was validated empirically against a live tunnel (FortiClient 7.4.3.4323,
-macOS). See [`SPIKE.md`](./SPIKE.md) for the "why it works" walkthrough and
+macOS). See [`docs/how-it-works.md`](./docs/how-it-works.md) for the "why it works"
+walkthrough and
 [`docs/superpowers/specs/2026-06-20-fortivpn-cli-via-cdp-design.md`](./docs/superpowers/specs/2026-06-20-fortivpn-cli-via-cdp-design.md)
 for the full design.
 
@@ -62,15 +64,17 @@ CDP is only reachable when the Electron process is started with
 `--remote-debugging-port=<port>`. FortiClient does not enable it in normal tray-GUI mode,
 so **you must launch FortiClient yourself with that flag** for this tool to attach.
 
-The tool is deliberately **attach-only**: it never launches, quits, or restarts
-FortiClient. That is a safety decision — the VPN client owns the tunnel and the system
-network configuration, and a CLI silently bouncing it would be surprising and could drop a
-live connection. So lifecycle is your responsibility (a LaunchAgent does it once, at
-login), and the tool only ever attaches to what is already running. If nothing is
-listening on the debug port, every command fails fast with exit code `3`
-(`NotRunningError`) and a message telling you how to start it.
+The tool is **attach-only by default**: it never *automatically* launches, quits, or
+restarts FortiClient. That is a safety decision — the VPN client owns the tunnel and the
+system network configuration, and a CLI silently bouncing it would be surprising and could
+drop a live connection. The single explicit exception is `forti startserver`, which you run
+deliberately to launch FortiClient headless + debug (handy for ad-hoc use). Otherwise
+lifecycle is your responsibility (a LaunchAgent does it once, at login). If nothing is
+listening on the debug port, every *other* command fails fast with exit code `3`
+(`NotRunningError`) and tells you exactly how to start it — including the `forti startserver`
+shortcut.
 
-The recommended launch is:
+The recommended launch is either `forti startserver` or, equivalently, by hand:
 
 ```bash
 /Applications/FortiClient.app/Contents/MacOS/FortiClient --hide-gui --remote-debugging-port=9222
@@ -200,6 +204,9 @@ Global options:
   environment variable. Must match the `--remote-debugging-port` FortiClient was launched
   with.
 - `--host H` — CDP host (default `127.0.0.1`).
+- `--verbose` / `--quiet` — progress messages. Verbose is **on by default** and writes
+  progress to **stderr**; `--quiet` silences it. Either way `stdout` carries only the
+  machine-readable result, so `--json` output and shell pipelines are byte-identical.
 
 `list` and `status` additionally accept `--json` for machine-readable output.
 
@@ -278,6 +285,25 @@ $ forti ip
 172.16.200.2
 ```
 
+### `forti startserver`
+
+Launch FortiClient headless with CDP enabled, so the attach-only commands have something to
+attach to. **This is the one command that starts FortiClient** — every other command only
+attaches. It is idempotent (does nothing if the port already answers), and if FortiClient is
+not installed it prints a download hint and exits `8`.
+
+```console
+$ forti startserver
+FortiClient CDP listening on 127.0.0.1:9222
+```
+
+Use it for ad-hoc sessions; for a permanent setup prefer the LaunchAgent above. FortiClient
+is single-instance: if an ordinary tray-GUI FortiClient is already running, quit it first —
+starting a second instance just forwards its arguments to the first, which won't open the
+debug port.
+
+- `--no-wait` — launch and return immediately without waiting for the port to open.
+
 ---
 
 ## Exit codes
@@ -294,6 +320,7 @@ match [`src/fortivpn/errors.py`](./src/fortivpn/errors.py).
 | `5` | Unsupported in v1 — SSL profile or 2FA/XAUTH required (`UnsupportedError`) |
 | `6` | Connect failed (negotiated then dropped) or a CDP evaluation threw (`ConnectFailed` / `CDPEvaluateError`) |
 | `7` | Timed out waiting for CONNECTED, including never leaving DISCONNECTED (`ConnectTimeout`) |
+| `8` | FortiClient is not installed — `startserver` could not find the app (`FortiClientNotFoundError`) |
 | `1` | Any other `FortiError` |
 
 ---
@@ -323,11 +350,13 @@ scope, with a clear error rather than a guess:
   raises `UnsupportedError("2FA not supported in v1")` (exit `5`) instead of prompting.
 - **No profile management.** No create / delete / rename / import, even though the
   underlying API exposes it. Profiles are managed in FortiClient itself.
-- **No lifecycle management.** The tool never starts or stops FortiClient; you install the
-  LaunchAgent above yourself.
+- **No automatic lifecycle management.** Commands never auto-start, quit, or restart
+  FortiClient. The one explicit launcher is `forti startserver` (or install the LaunchAgent
+  above); the tool still never quits or restarts a *running* FortiClient.
 - **No default profile / config file.** The profile name is always passed explicitly.
 
-For the validated control path and the rationale, see [`SPIKE.md`](./SPIKE.md) and the
+For the validated control path and the rationale, see
+[`docs/how-it-works.md`](./docs/how-it-works.md) and the
 [design spec](./docs/superpowers/specs/2026-06-20-fortivpn-cli-via-cdp-design.md).
 
 ---
