@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Per-user LaunchAgent that runs FortiClient headless + CDP debug at login.
+
+      Why this exists: the `forti` CLI is attach-only - it never starts or stops
+      FortiClient. CDP is only reachable when the Electron process is launched
+      with `--remote-debugging-port`, which FortiClient does NOT enable in normal
+      tray-GUI mode. This agent launches it once at login with that flag so the
+      CLI always has something to attach to.
+
+      Install:
+        cp contrib/com.fortivpn.headless.plist ~/Library/LaunchAgents/
+        launchctl load -w ~/Library/LaunchAgents/com.fortivpn.headless.plist
+      Uninstall:
+        launchctl unload -w ~/Library/LaunchAgents/com.fortivpn.headless.plist
+
+      NOTE: FortiClient is single-instance, so this REPLACES the tray-GUI mode.
+      Switching modes (or restarting the process) drops any active tunnel.
+      Keep the port here in sync with --port / FORTI_CDP_PORT passed to `forti`.
+    -->
+    <key>Label</key>
+    <string>com.fortivpn.headless</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/FortiClient.app/Contents/MacOS/FortiClient</string>
+        <string>--hide-gui</string>
+        <string>--remote-debugging-port=9222</string>
+    </array>
+
+    <!-- Start at login. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Relaunch if it exits, so the debug port stays available. -->
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>

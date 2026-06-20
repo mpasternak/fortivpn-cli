@@ -2,6 +2,7 @@
 name = "fortivpn"
 version = "0.1.0"
 requires-python = ">=3.11"
+readme = "README.md"
 description = "Control FortiClient IPsec VPN on macOS via the Chrome DevTools Protocol (no GUI automation)."
 # Zero runtime dependencies is a hard design requirement: the tool uses only the
 # Python standard library (socket, json, urllib, subprocess, argparse). See the
