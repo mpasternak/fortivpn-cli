@@ -1,6 +1,6 @@
 [project]
 name = "fvpnctl"
-version = "0.2.1"
+version = "0.2.2"
 requires-python = ">=3.11"
 readme = "README.md"
 description = "Control your FortiClient VPN from the macOS command line."
@@ -28,12 +28,20 @@ classifiers = [
 # The single entry below is NOT a real dependency. fvpnctl is macOS-only (it
 # drives the FortiClient.app debug port) and has no Windows support, so this is an
 # intentionally unsatisfiable requirement gated to win32: on Windows pip/uv/uvx
-# fail fast with a clear "no matching distribution" error instead of installing
-# something that cannot work. On macOS — and on Linux, where CI runs the
-# platform-agnostic mocked test suite — the marker is false, so the dependency set
-# stays empty.
+# fail fast instead of installing something that cannot work. On macOS — and on
+# Linux, where CI runs the platform-agnostic mocked test suite — the marker is
+# false, so the dependency set stays empty.
+#
+# IMPORTANT: the constraint pins a PyPA-owned package (setuptools) to an
+# impossible version, NOT a made-up package name. A non-existent placeholder name
+# would be a dependency-confusion hole: an attacker could register that name on
+# PyPI, and then `pip install fvpnctl` on Windows would *succeed* and pull in
+# their code instead of failing. No PEP 440 version is < 0, so `setuptools<0` can
+# never be satisfied by anyone — setuptools is PyPA-controlled and cannot be
+# squatted — making this a permanently safe, unsatisfiable gate. cli.main() also
+# refuses to run on win32 as a runtime backstop.
 dependencies = [
-    "fvpnctl-is-macos-only-see-readme; sys_platform == 'win32'",
+    "setuptools<0; sys_platform == 'win32'",
 ]
 
 [project.urls]

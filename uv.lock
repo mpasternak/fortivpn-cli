@@ -12,7 +12,7 @@ supported-markers = [
 
 [[package]]
 name = "fvpnctl"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "." }
 
 [package.dev-dependencies]
@@ -22,7 +22,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fvpnctl-is-macos-only-see-readme", marker = "sys_platform == 'win32'" }]
+requires-dist = [{ name = "setuptools", marker = "sys_platform == 'win32'", specifier = "<0" }]
 
 [package.metadata.requires-dev]
 dev = [
