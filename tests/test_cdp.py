@@ -161,8 +161,13 @@ def test_connect_raises_not_running_when_endpoint_unreachable(monkeypatch):
     sess = cdp.CDPSession(port=9222)
     with pytest.raises(NotRunningError) as excinfo:
         sess.connect()
-    # The message must be actionable: tell the user how to launch FortiClient.
-    assert "remote-debugging-port" in str(excinfo.value)
+    # The transport message is FACTUAL only — it names the URL and the failure,
+    # and must NOT embed launch instructions or doc references (the CLI now
+    # supplies the actionable guidance; transport stays decoupled).
+    msg = str(excinfo.value)
+    assert "Cannot reach" in msg
+    assert "http://127.0.0.1:9222/json" in msg
+    assert "SPIKE" not in msg
 
 
 def test_connect_raises_not_running_when_no_debuggable_page(monkeypatch):

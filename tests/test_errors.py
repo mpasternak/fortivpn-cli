@@ -12,6 +12,7 @@ from fortivpn.errors import (
     CDPEvaluateError,
     ConnectFailed,
     ConnectTimeout,
+    FortiClientNotFoundError,
     FortiError,
     KeychainError,
     NotRunningError,
@@ -25,6 +26,7 @@ ALL_SUBCLASSES = [
     KeychainError,
     ConnectFailed,
     ConnectTimeout,
+    FortiClientNotFoundError,
 ]
 
 # The exit-code contract from the design spec (section 5).
@@ -36,6 +38,7 @@ EXPECTED_EXIT_CODES = {
     ConnectFailed: 6,
     CDPEvaluateError: 6,
     ConnectTimeout: 7,
+    FortiClientNotFoundError: 8,
 }
 
 

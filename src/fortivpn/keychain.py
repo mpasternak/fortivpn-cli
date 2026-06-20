@@ -15,7 +15,7 @@ single newline; we strip exactly that newline (see ``rstrip("\\n")`` below).
 Why the ``forti-vpn-<profile>`` service-name convention
 -------------------------------------------------------
 This naming is inherited verbatim from the sibling AppleScript repository that
-drove FortiClient before this tool existed (confirmed working — see SPIKE.md
+drove FortiClient before this tool existed (confirmed working — see docs/how-it-works.md
 section 6). Keeping the same generic-password *service* name (``-s``) and
 *account* name (``-a``) means every Keychain item a user already created for the
 old tool keeps working here with no re-entry — they are the same item.

@@ -15,9 +15,12 @@ Why attach-only
 ---------------
 The tool never starts, stops, or restarts FortiClient. It connects to a
 FortiClient the user already launched headless with ``--remote-debugging-port``
-(see SPIKE.md section 1). If the debugging port is unreachable, ``CDPSession``
-raises :class:`~fortivpn.errors.NotRunningError` and the CLI surfaces that as a
-stderr line + exit code 3 — it does not try to launch anything.
+(see docs/how-it-works.md section 1). If the debugging port is unreachable,
+``CDPSession`` raises :class:`~fortivpn.errors.NotRunningError`; the CLI surfaces
+the factual message as a stderr line + exit code 3 and then prints actionable
+guidance (suggesting ``forti startserver`` or the exact launch command). The one
+exception to attach-only is the explicit ``startserver`` subcommand, which uses
+``launcher`` to start FortiClient headless — see :func:`_cmd_startserver`.
 
 The type → exit-code contract
 -----------------------------
@@ -42,9 +45,17 @@ No subcommand accepts or echoes a password. ``connect`` resolves the secret
 inside the controller (from the Keychain) and never receives, prints, or logs
 it here.
 
-``CDPSession`` and ``FortiVPN`` are imported as module-level names so the test
-suite can monkeypatch ``fortivpn.cli.CDPSession`` / ``fortivpn.cli.FortiVPN``
-with CI-safe fakes (no real socket, no real FortiClient).
+``CDPSession``, ``FortiVPN`` and ``launcher`` are referenced as module-level
+names so the test suite can monkeypatch ``fortivpn.cli.CDPSession`` /
+``fortivpn.cli.FortiVPN`` / ``fortivpn.cli.launcher`` with CI-safe fakes (no real
+socket, no real FortiClient, no real subprocess).
+
+Verbose / quiet
+---------------
+``--verbose`` (default ON) emits concise progress to **stderr** via
+:func:`report`; ``--quiet`` turns it off (and wins if both are given). stdout is
+reserved for the machine-readable result only, so ``--json`` and shell pipelines
+are unaffected by verbosity.
 """
 
 import argparse
@@ -52,18 +63,39 @@ import json
 import os
 import sys
 
+from fortivpn import launcher
 from fortivpn.cdp import CDPSession
 from fortivpn.controller import FortiVPN
-from fortivpn.errors import FortiError
+from fortivpn.errors import FortiError, NotRunningError
 
-# IPsec ``ipsec_state`` value meaning "tunnel up" (SPIKE.md section 2 / design
-# spec 4.2). The CLI only needs the CONNECTED sentinel; the controller owns the
-# full enum.
+# IPsec ``ipsec_state`` value meaning "tunnel up" (docs/how-it-works.md section 2
+# / design spec 4.2). The CLI only needs the CONNECTED sentinel; the controller
+# owns the full enum.
 _CONNECTED = 2
 
 # Connection type for v1. Only IPsec is supported (SSL is out of scope); the CLI
 # always queries/derives with this type. See design spec section 2.
 _IPSEC = "ipsec"
+
+# Verbosity flag toggled by ``main`` from ``--verbose``/``--quiet``. Module-level
+# (rather than threaded through every call) so ``report`` can be passed straight
+# to ``launcher.start_server(on_info=report)`` as a plain ``Callable[[str], None]``
+# without binding extra state. Default ON: progress is the friendly default.
+_VERBOSE = True
+
+
+def report(msg: str) -> None:
+    """Write one progress line to **stderr** when verbose; no-op when quiet.
+
+    Why stderr (never stdout): stdout is the machine-readable channel — the JSON
+    blob, the IP, the status line that scripts parse. Routing all human progress
+    to stderr keeps ``forti ... --json`` and shell pipelines byte-for-byte
+    identical whether the user runs verbose or quiet. Doubles as the
+    ``on_info`` callback for :func:`launcher.start_server`, so launch progress
+    flows through the same gate.
+    """
+    if _VERBOSE:
+        print(msg, file=sys.stderr)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -94,6 +126,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "--host",
         default="127.0.0.1",
         help="Host the CDP debugging endpoint binds to (default 127.0.0.1).",
+    )
+    # Verbosity: --verbose is the default (ON); --quiet turns progress off and
+    # wins if both are passed. Progress goes to stderr only (see ``report``), so
+    # neither flag changes the stdout result. ``default=True`` on --verbose with
+    # ``store_false`` on --quiet writing the same ``verbose`` dest means "--quiet
+    # wins" falls out naturally regardless of order.
+    parser.add_argument(
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        default=True,
+        help="Print progress to stderr (default). stdout stays machine-readable.",
+    )
+    parser.add_argument(
+        "--quiet",
+        dest="verbose",
+        action="store_false",
+        help="Silence stderr progress (wins over --verbose). stdout is unchanged.",
     )
 
     sub = parser.add_subparsers(dest="command")
@@ -135,6 +185,24 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_ip = sub.add_parser("ip", help="Print the current tunnel's assigned VPN IP.")
     p_ip.set_defaults(func=_cmd_ip)
+
+    p_startserver = sub.add_parser(
+        "startserver",
+        help="Launch FortiClient headless with the CDP debugging port enabled.",
+        description=(
+            "Start FortiClient headless with the Chrome DevTools Protocol enabled so "
+            "the other (attach-only) commands have something to attach to. Idempotent: "
+            "if a CDP server already answers on the port, it does nothing. If "
+            "FortiClient is not installed it exits 8 with a download hint. This is the "
+            "one command that launches FortiClient; every other command is attach-only."
+        ),
+    )
+    p_startserver.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="Launch and return immediately without waiting for the CDP port to open.",
+    )
+    p_startserver.set_defaults(func=_cmd_startserver)
 
     return parser
 
@@ -234,6 +302,7 @@ def _cmd_connect(forti: FortiVPN, args: argparse.Namespace) -> int:
     controller (from the Keychain) and is never accepted or printed here.
     """
     wait = not args.no_wait
+    report(f"Connecting profile {args.profile}…")
     state = forti.connect(
         args.profile,
         username=args.user,
@@ -247,7 +316,9 @@ def _cmd_connect(forti: FortiVPN, args: argparse.Namespace) -> int:
 
     if state.ipsec_state == _CONNECTED:
         ip = forti.connection_ip(args.profile, _IPSEC)
-        print(f"CONNECTED {args.profile} {ip.get('vpn_ip', '')}")
+        vpn_ip = ip.get("vpn_ip", "")
+        report(f"Connected: {vpn_ip}")
+        print(f"CONNECTED {args.profile} {vpn_ip}")
     else:
         # Reached here only with wait=True and a non-connected terminal state the
         # controller chose not to raise on (e.g. wait semantics changed); report
@@ -280,6 +351,24 @@ def _cmd_ip(forti: FortiVPN, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_startserver(args: argparse.Namespace) -> int:
+    """``forti startserver`` — launch FortiClient headless with CDP enabled.
+
+    The one non-attach-only command. It does **not** open a ``CDPSession`` (there
+    may be nothing to attach to yet); :func:`main` dispatches it before the
+    session is created. Routes to ``launcher.start_server`` with ``wait=0`` when
+    ``--no-wait`` is given, else the default 10s, wiring :func:`report` as the
+    ``on_info`` progress channel. On success prints a short stdout line naming the
+    endpoint. ``launcher`` is referenced as ``cli.launcher`` so tests can
+    monkeypatch it; failures (``FortiClientNotFoundError`` → exit 8, or a
+    ``FortiError`` timeout → exit 1) propagate to the top-level handler.
+    """
+    wait = 0.0 if args.no_wait else 10.0
+    launcher.start_server(args.host, args.port, wait=wait, on_info=report)
+    print(f"FortiClient CDP listening on {args.host}:{args.port}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse ``argv``, run the chosen subcommand, return the process exit code.
 
@@ -292,6 +381,8 @@ def main(argv: list[str] | None = None) -> int:
     why parsing happens *outside* the ``FortiError`` try block. Anything that is
     not a ``FortiError`` is a genuine bug and is left to propagate.
     """
+    global _VERBOSE
+
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -299,11 +390,30 @@ def main(argv: list[str] | None = None) -> int:
         # No subcommand given: print usage and exit 2 (argparse usage-error code).
         parser.error("a subcommand is required")
 
+    # Apply verbosity for the whole run before any ``report`` call fires. --quiet
+    # wins automatically: both flags write the same ``verbose`` dest, and
+    # ``store_false`` ends up False whenever --quiet appears.
+    _VERBOSE = args.verbose
+
     try:
+        if args.command == "startserver":
+            # Bootstrap command: it LAUNCHES FortiClient, so it must not attach to
+            # a CDP session (there may be nothing to attach to yet). Dispatched
+            # here, before any CDPSession is opened.
+            return _cmd_startserver(args)
+
+        report(f"Attaching to FortiClient CDP at {args.host}:{args.port}…")
         with CDPSession(args.port, args.host) as session:
             session.connect()
             forti = FortiVPN(session)
             return args.func(forti, args)
+    except NotRunningError as e:
+        # FortiClient's CDP endpoint is unreachable. The exception message is
+        # factual only (cdp.py keeps the transport decoupled); the CLI owns the
+        # actionable "how to fix it" guidance, printed to stderr below.
+        print(e, file=sys.stderr)
+        _print_not_running_guidance(args.port)
+        return e.exit_code
     except FortiError as e:
         # Expected, user-facing failure: the type carries the exit code and the
         # message is what the user should see. Never a bare traceback.
@@ -314,6 +424,29 @@ def main(argv: list[str] | None = None) -> int:
         # partially written line is not left dangling on the terminal.
         print("interrupted", file=sys.stderr)
         return 130
+
+
+def _print_not_running_guidance(port: int) -> None:
+    """Print actionable "how to reach FortiClient" advice to stderr.
+
+    Complements the factual :class:`~fortivpn.errors.NotRunningError` message
+    (which only names the unreachable URL). Always suggests ``forti startserver``.
+    Then, if :func:`launcher.find_forticlient` locates the installed executable,
+    it shows the exact manual launch command for users who prefer to run it
+    themselves; if FortiClient is not installed at all, it shows
+    :func:`launcher.download_hint` instead. ``launcher`` is referenced via the
+    module global so tests can monkeypatch ``cli.launcher``. This guidance is
+    independent of verbosity — a hard error always explains how to recover.
+    """
+    print("To start it, run:  forti startserver", file=sys.stderr)
+    exe = launcher.find_forticlient()
+    if exe is not None:
+        print(
+            f'Or launch it yourself:  "{exe}" --hide-gui --remote-debugging-port={port}',
+            file=sys.stderr,
+        )
+    else:
+        print(launcher.download_hint(), file=sys.stderr)
 
 
 if __name__ == "__main__":

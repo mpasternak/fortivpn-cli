@@ -10,7 +10,7 @@ FortiClient-specific knowledge — the call names, the argument shapes, the
 connect ordering, and the v1 guards — lives here.
 
 This module is a direct promotion of the empirically validated spike
-(``/tmp/forti_connect.py``; findings in ``SPIKE.md``). Two non-obvious facts it
+(``/tmp/forti_connect.py``; findings in ``docs/how-it-works.md``). Two non-obvious facts it
 encodes are worth stating up front because nothing in the code would let a
 reader infer them:
 
@@ -19,7 +19,7 @@ Why every guimessenger return value is ``json.loads``-ed
 ``CDPSession.evaluate()`` already unwraps the CDP ``Runtime.evaluate`` reply and
 hands back the *JS value*. But the FortiClient renderer's ``window.guimessenger``
 methods do not return JS objects — they return a **JSON string** (a Promise
-resolving to a string of JSON; see SPIKE.md section 2). So ``evaluate()`` returns
+resolving to a string of JSON; see docs/how-it-works.md section 2). So ``evaluate()`` returns
 that string verbatim, and this layer must ``json.loads`` it to recover the actual
 list/dict. Every helper below therefore does ``json.loads(self._eval(...))``.
 
@@ -29,7 +29,7 @@ The validated connect sequence calls ``SetGuiHandle()`` *first*. This registers
 the GUI handle the daemon routes XAUTH/state callbacks to. Skipping it is not a
 loud failure: ``ConnectTunnel`` still returns its ``["1"]`` ack, but the daemon
 never begins negotiating and ``getConnectionState`` stays pinned at ``0``
-forever (reproduced in the spike; see SPIKE.md section 3 and design spec 4.2).
+forever (reproduced in the spike; see docs/how-it-works.md section 3 and design spec 4.2).
 :meth:`FortiVPN.connect` therefore always evaluates ``SetGuiHandle()`` before
 ``ConnectTunnel`` — the ordering is load-bearing, not cosmetic.
 
@@ -37,7 +37,7 @@ Why several reads need a JSON argument
 --------------------------------------
 ``GetIPSecGeneralInfo``, ``getConnectionIP`` and ``getConnectionInfo`` require a
 ``JSON.stringify({connection_name, connection_type})`` argument; without it the
-renderer raises "Error in native callback" (SPIKE.md section 2). We build that
+renderer raises "Error in native callback" (docs/how-it-works.md section 2). We build that
 argument the same way the GUI does and the same way the spike validated — see
 :meth:`_eval_with_json_arg`.
 """
@@ -49,7 +49,7 @@ from dataclasses import dataclass
 from fortivpn import keychain
 from fortivpn.errors import ConnectFailed, ConnectTimeout, UnsupportedError
 
-# Connection-state enum reported in ``ipsec_state`` (SPIKE.md section 2 / design
+# Connection-state enum reported in ``ipsec_state`` (docs/how-it-works.md section 2 / design
 # spec 4.2). These integers come straight from the daemon; the labels are ours.
 _DISCONNECTED = 0
 _CONNECTING = 1
@@ -171,7 +171,7 @@ class FortiVPN:
         itself be a *JSON string*. We reproduce the spike's exact double-encoding:
         ``inner = json.dumps(obj)`` produces the JSON string the daemon expects,
         then ``json.dumps(inner)`` wraps it as a JS string literal so the
-        evaluated expression is syntactically valid JavaScript (SPIKE.md section 2).
+        evaluated expression is syntactically valid JavaScript (docs/how-it-works.md section 2).
         """
         inner = json.dumps(obj)  # the JSON string the daemon wants as the argument
         js_literal = json.dumps(inner)  # wrap as a JS string literal for evaluate()
@@ -192,7 +192,7 @@ class FortiVPN:
     def profile_info(self, name: str, ctype: str = "ipsec") -> dict:
         """Return ``GetIPSecGeneralInfo`` for ``name`` (gateway, username, ...).
 
-        Requires the JSON argument (module docstring / SPIKE.md section 2).
+        Requires the JSON argument (module docstring / docs/how-it-works.md section 2).
 
         :param name: the profile's ``connection_name``.
         :param ctype: ``connection_type`` (``"ipsec"`` in v1).
@@ -245,7 +245,7 @@ class FortiVPN:
     ) -> ConnectionState:
         """Connect IPsec profile ``name`` using the validated flow.
 
-        Algorithm (design spec 4.2 / SPIKE.md section 3):
+        Algorithm (design spec 4.2 / docs/how-it-works.md section 3):
 
         1. Resolve the :class:`Profile` from :meth:`profiles`; if its ``type`` is
            not ``"ipsec"`` raise :class:`UnsupportedError` *before* touching the

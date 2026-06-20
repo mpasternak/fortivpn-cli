@@ -34,6 +34,7 @@ import pytest
 from fortivpn import cli
 from fortivpn.errors import (
     ConnectTimeout,
+    FortiClientNotFoundError,
     FortiError,
     KeychainError,
     NotRunningError,
@@ -473,3 +474,186 @@ def test_no_subcommand_exits_2():
     with pytest.raises(SystemExit) as excinfo:
         cli.main([])
     assert excinfo.value.code == 2
+
+
+# -- verbose / quiet ---------------------------------------------------------
+#
+# The contract: verbose progress goes to STDERR only; stdout stays the
+# machine-readable result. --verbose is the default (ON); --quiet wins.
+
+
+def test_verbose_is_default_and_writes_progress_to_stderr(capsys):
+    FakeController.config["state"] = FakeState(ipsec_state=0, name="", state_label="DISCONNECTED")
+
+    rc = cli.main(["status"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    # The machine-readable result is on stdout, unchanged by verbosity.
+    assert captured.out.strip() == "DISCONNECTED"
+    # Progress appears on stderr (the "attaching" line names host/port).
+    assert "9222" in captured.err
+    assert captured.err.strip() != ""
+
+
+def test_quiet_silences_stderr_progress_but_keeps_stdout(capsys):
+    FakeController.config["state"] = FakeState(ipsec_state=0, name="", state_label="DISCONNECTED")
+
+    rc = cli.main(["--quiet", "status"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    # stdout result identical to the verbose case...
+    assert captured.out.strip() == "DISCONNECTED"
+    # ...but no progress chatter on stderr.
+    assert captured.err.strip() == ""
+
+
+def test_quiet_wins_when_both_flags_given(capsys):
+    FakeController.config["state"] = FakeState(ipsec_state=0, name="", state_label="DISCONNECTED")
+
+    rc = cli.main(["--verbose", "--quiet", "status"])
+
+    assert rc == 0
+    assert capsys.readouterr().err.strip() == ""
+
+
+def test_quiet_does_not_pollute_json_stdout(capsys):
+    FakeController.config["state"] = FakeState(
+        ipsec_state=0, name="", state_label="DISCONNECTED", raw={"ipsec_state": 0}
+    )
+
+    rc = cli.main(["--verbose", "status", "--json"])
+
+    assert rc == 0
+    # stdout must be parseable JSON even with verbose progress on stderr.
+    data = json.loads(capsys.readouterr().out)
+    assert data["ipsec_state"] == 0
+
+
+# -- startserver -------------------------------------------------------------
+
+
+class _FakeLauncher:
+    """Stand-in for ``fortivpn.cli.launcher`` capturing start_server's call."""
+
+    def __init__(self):
+        self.calls = []
+        self.start_error = None
+
+    def start_server(self, host, port, *, wait, on_info=None):
+        self.calls.append({"host": host, "port": port, "wait": wait, "on_info": on_info})
+        if self.start_error is not None:
+            raise self.start_error
+        # Exercise the on_info channel so we confirm it is wired to the reporter.
+        if on_info is not None:
+            on_info("fake launcher progress")
+
+    # The NotRunningError-guidance tests patch these too.
+    def find_forticlient(self):
+        return None
+
+    def download_hint(self):
+        return "install it from somewhere"
+
+
+def test_startserver_routes_to_launcher_with_host_port(monkeypatch, capsys):
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+
+    rc = cli.main(["--port", "9400", "--host", "localhost", "startserver"])
+
+    assert rc == 0
+    assert len(fake.calls) == 1
+    call = fake.calls[0]
+    assert call["host"] == "localhost"
+    assert call["port"] == 9400
+    assert call["wait"] == 10.0
+    # Success line on stdout names the endpoint.
+    out = capsys.readouterr().out
+    assert "localhost:9400" in out
+
+
+def test_startserver_no_wait_passes_zero_wait(monkeypatch, capsys):
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+
+    rc = cli.main(["startserver", "--no-wait"])
+
+    assert rc == 0
+    assert fake.calls[0]["wait"] == 0
+
+
+def test_startserver_does_not_open_cdp_session(monkeypatch):
+    # startserver is the bootstrap command: it must NOT attach to CDP (there may
+    # be nothing to attach to yet).
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+
+    cli.main(["startserver"])
+
+    assert FakeSession.instances == []
+
+
+def test_startserver_quiet_keeps_only_result_on_stdout(monkeypatch, capsys):
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+
+    rc = cli.main(["--quiet", "startserver"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.err.strip() == ""
+    assert "127.0.0.1:9222" in captured.out
+
+
+def test_startserver_not_found_exits_8(monkeypatch, capsys):
+    fake = _FakeLauncher()
+    fake.start_error = FortiClientNotFoundError("not installed: get it from URL")
+    monkeypatch.setattr(cli, "launcher", fake)
+
+    rc = cli.main(["startserver"])
+
+    assert rc == 8
+    captured = capsys.readouterr()
+    assert captured.err.strip() != ""
+    assert captured.out.strip() == ""
+
+
+# -- NotRunningError guidance ------------------------------------------------
+
+
+def test_not_running_guidance_suggests_startserver_no_spike(monkeypatch, capsys):
+    # find_forticlient returns a path -> show the exact launch command.
+    fake = _FakeLauncher()
+    monkeypatch.setattr(fake, "find_forticlient", lambda: "/Applications/FortiClient.app/x")
+    monkeypatch.setattr(cli, "launcher", fake)
+    FakeController.config["state"] = NotRunningError
+
+    rc = cli.main(["status"])
+
+    assert rc == 3
+    err = capsys.readouterr().err
+    # The factual message + actionable guidance, all on stderr.
+    assert "forti startserver" in err
+    # Because the executable was found, the exact launch command is shown.
+    assert "--remote-debugging-port=9222" in err
+    assert "/Applications/FortiClient.app/x" in err
+    # No legacy doc reference.
+    assert "SPIKE" not in err
+
+
+def test_not_running_guidance_shows_download_hint_when_not_installed(monkeypatch, capsys):
+    fake = _FakeLauncher()
+    monkeypatch.setattr(fake, "find_forticlient", lambda: None)
+    monkeypatch.setattr(fake, "download_hint", lambda: "DOWNLOAD-HINT-SENTINEL")
+    monkeypatch.setattr(cli, "launcher", fake)
+    FakeController.config["state"] = NotRunningError
+
+    rc = cli.main(["status"])
+
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "forti startserver" in err
+    assert "DOWNLOAD-HINT-SENTINEL" in err
+    assert "SPIKE" not in err

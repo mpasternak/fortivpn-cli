@@ -52,6 +52,24 @@ class NotRunningError(FortiError):
     exit_code: int = 3
 
 
+class FortiClientNotFoundError(FortiError):
+    """FortiClient is not installed where we can find it.
+
+    Why / when raised: ``launcher.start_server()`` raises this when it needs to
+    *launch* FortiClient (because the CDP port is unreachable) but
+    ``launcher.find_forticlient()`` returns ``None`` — i.e. none of the known
+    ``/Applications/FortiClient*.app`` bundles exists. The distinction from
+    ``NotRunningError`` (exit ``3``) is deliberate: ``NotRunningError`` means
+    "FortiClient is installed but not reachable over CDP — go launch it",
+    whereas this means "there is nothing to launch — go install it". The message
+    should carry ``launcher.download_hint()`` so the user knows where to get the
+    free VPN client. Exits ``8`` so install scripts can branch on "client
+    absent from disk" specifically.
+    """
+
+    exit_code: int = 8
+
+
 class KeychainError(FortiError):
     """Reading the VPN password from the macOS login Keychain failed.
 
@@ -110,7 +128,7 @@ class ConnectTimeout(FortiError):
     Why / when raised: ``connect(wait=True)`` raises this when the timeout elapses
     before ``ipsec_state == 2`` — **including the case where the state never left
     ``0``** (a silent rejection where the daemon never even begins negotiating;
-    see SPIKE.md / design spec section 4.2). Kept separate from ConnectFailed so
+    see docs/how-it-works.md / design spec section 4.2). Kept separate from ConnectFailed so
     callers can distinguish "negotiated then failed" from "never moved" and retry
     accordingly. Exits ``7``.
     """

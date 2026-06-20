@@ -7,8 +7,8 @@ Electron renderer target over the ``/json`` HTTP endpoint, opens a raw WebSocket
 to it, and runs ``Runtime.evaluate`` so callers can drive the in-page
 ``window.guimessenger`` API. It knows nothing about VPN profiles or state — that
 lives one layer up in ``controller.py``. It is a promotion of the empirically
-validated spike client (``/tmp/cdp_eval.py``); see ``SPIKE.md`` for the findings
-this is built on.
+validated spike client (``/tmp/cdp_eval.py``); see ``docs/how-it-works.md`` for the
+findings this is built on.
 
 Why it is a hand-rolled raw WebSocket (and not a library)
 ---------------------------------------------------------
@@ -32,8 +32,19 @@ across all three payload-length encodings, with no socket involved. Socket I/O
 is routed through the :meth:`CDPSession._send` / :meth:`CDPSession._recv` seam so
 ``evaluate()`` can be driven by a fake transport in tests.
 
-See ``SPIKE.md`` sections 1-2 for the launch command and the ``window.guimessenger``
-API surface this transport exists to reach.
+See ``docs/how-it-works.md`` sections 1-2 for the launch command and the
+``window.guimessenger`` API surface this transport exists to reach.
+
+Why the ``NotRunningError`` message stays factual
+-------------------------------------------------
+``NotRunningError`` here reports only *what failed* (the URL it could not reach
+and the underlying reason) — it deliberately carries **no** launch instructions
+or doc pointers. Telling the user *how to fix it* (run ``forti startserver``,
+the exact launch command, where to download FortiClient) is the CLI's job
+(``cli.py``), which has access to ``launcher`` to detect the installed
+executable and tailor the advice. Keeping the transport decoupled means the
+same exception is reusable by non-CLI callers that want to phrase their own
+guidance.
 """
 
 import base64
@@ -50,14 +61,6 @@ from fortivpn.errors import CDPEvaluateError, NotRunningError
 _OPCODE_TEXT = 0x1
 _OPCODE_BINARY = 0x2
 _OPCODE_CLOSE = 0x8
-
-# How the user must have launched FortiClient for us to attach. Reused verbatim
-# in the NotRunningError message so the error is directly actionable.
-_LAUNCH_HINT = (
-    "Launch it headless with CDP enabled first, e.g.:\n"
-    "    FortiClient --hide-gui --remote-debugging-port={port}\n"
-    "(see SPIKE.md section 1)."
-)
 
 
 def encode_frame(text: str) -> bytes:
@@ -142,13 +145,15 @@ class CDPSession:
         """Find the renderer ``page`` target via ``GET http://host:port/json``.
 
         Prefers a target of type ``page`` that exposes a ``webSocketDebuggerUrl``
-        (FortiClient's renderer is the single ``base.html`` page; see SPIKE.md
-        section 1), falling back to any other target that carries a debugger URL.
+        (FortiClient's renderer is the single ``base.html`` page; see
+        docs/how-it-works.md section 1), falling back to any other target that
+        carries a debugger URL.
 
         :returns: the chosen target dict (has a ``webSocketDebuggerUrl`` key).
         :raises NotRunningError: if the HTTP endpoint is unreachable, or no
             target exposes a ``webSocketDebuggerUrl`` (FortiClient is not running
-            with CDP enabled). The message tells the user how to launch it.
+            with CDP enabled). The message is factual only (the URL + the
+            reason); the CLI layers on the actionable "how to launch" guidance.
         """
         url = f"http://{self.host}:{self.port}/json"
         try:
@@ -157,17 +162,17 @@ class CDPSession:
         except OSError as exc:
             # OSError covers ConnectionRefusedError, URLError's socket failures,
             # timeouts, DNS errors — i.e. "nothing is listening on the port".
+            # FACTUAL message only: name the URL and the reason. The CLI adds the
+            # "run forti startserver / launch command / download" guidance.
             raise NotRunningError(
-                f"Cannot reach FortiClient's CDP endpoint at {url}: {exc}.\n"
-                + _LAUNCH_HINT.format(port=self.port)
+                f"Cannot reach FortiClient's CDP endpoint at {url}: {exc}."
             ) from exc
 
         debuggable = [t for t in targets if t.get("webSocketDebuggerUrl")]
         if not debuggable:
             raise NotRunningError(
-                f"No debuggable page target found at {url} "
-                f"(got {len(targets)} target(s), none with a webSocketDebuggerUrl).\n"
-                + _LAUNCH_HINT.format(port=self.port)
+                f"Cannot reach a debuggable page target at {url} "
+                f"(got {len(targets)} target(s), none with a webSocketDebuggerUrl)."
             )
         for target in debuggable:
             if target.get("type") == "page":
@@ -260,7 +265,7 @@ class CDPSession:
         remote object ref), ``userGesture:true`` (FortiClient gates some
         ``guimessenger`` calls behind a user gesture), and ``awaitPromise`` —
         because every ``window.guimessenger`` method returns a Promise resolving
-        to a JSON string (see SPIKE.md section 2).
+        to a JSON string (see docs/how-it-works.md section 2).
 
         :param expression: the JavaScript to evaluate in the renderer.
         :param await_promise: wait for a returned Promise to settle (default
