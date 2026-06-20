@@ -180,6 +180,27 @@ renderer code, a profile that requires an OTP/token has the GUI re-issue `Connec
 with a `token` field (for example `"FTM_PUSH_CLICKED"`), or call `SendToken(...)`. The
 exact sequence remains to be confirmed against a 2FA-enabled profile.
 
+## Hiding the window on connect
+
+`--hide-gui` only suppresses FortiClient's window at startup. On a successful connect the
+renderer calls `focusWindow()` and the main window pops up (with the Disconnect button) —
+`--hide-gui` does not gate that path.
+
+A *second* preload bridge, `window.forticlient`, is exposed in the same renderer world as
+`window.guimessenger`, so it can be driven the same way over CDP. It includes window
+controls:
+
+- `window.forticlient.closeMainWindow()` — closes the main window; the window's `close`
+  handler is intercepted into `hide()`, so it goes to the **tray without quitting the app**.
+- `window.forticlient.focusMainWindow()` — shows/raises the window (what connect triggers).
+- `window.forticlient.isMainWindowVisible()` — whether it is currently visible.
+- `window.forticlient.quit()` — **maps to `app.quit()` and quits FortiClient entirely**
+  (not just the window); do not confuse it with `closeMainWindow()`.
+
+So the post-connect popup is hidden by calling `window.forticlient.closeMainWindow()` over
+CDP — no patching of the app, and the CDP session and the tunnel are unaffected. (Verified
+live: focus → visible, close → hidden, CDP still alive.)
+
 ## Notes and gotchas
 
 - **Stale `DevToolsActivePort`.** Do not read the debug port from

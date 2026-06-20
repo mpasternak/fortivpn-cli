@@ -265,6 +265,14 @@ Options:
   that never leaves DISCONNECTED (a silent rejection) ends in a timeout (exit `7`); a
   tunnel that started negotiating and then dropped (e.g. bad credentials) is a connect
   failure (exit `6`).
+- `--show-window` — keep FortiClient's window visible after connecting (see the note below).
+
+By default, after a successful connect `forti` **hides FortiClient's window**. FortiClient
+pops its main window on connect even under `--hide-gui`, so `connect` calls
+`window.forticlient.closeMainWindow()` over CDP to send it back to the tray — best effort, so
+a failure to hide never fails an otherwise-successful connect. Pass `--show-window` to keep
+the window up. (This only applies in the waited path; with `--no-wait` the popup happens
+after the command returns.)
 
 ### `forti disconnect <profile>`
 
@@ -283,6 +291,17 @@ not connected.
 ```console
 $ forti ip
 172.16.200.2
+```
+
+### `forti hide-window`
+
+Hide FortiClient's main window to the tray, over CDP (via
+`window.forticlient.closeMainWindow()`, which hides the window without quitting the app).
+`connect` already does this by default; run it manually when the window is up for another
+reason (e.g. a `connect --show-window`, or FortiClient popped it itself).
+
+```console
+$ forti hide-window
 ```
 
 ### `forti startserver`

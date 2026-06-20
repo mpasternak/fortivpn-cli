@@ -21,9 +21,12 @@ DevTools Protocol (CDP). Separate project from the AppleScript/AX variant
   launched with `--remote-debugging-port`. The only command that launches FortiClient is
   the explicit `startserver`; commands never auto-start, quit, or restart it.
 - IPsec profiles with credentials in the login Keychain, **no 2FA** (the validated case).
-- Commands: `list`, `status`, `connect`, `disconnect`, `ip`, `startserver`.
+- Commands: `list`, `status`, `connect`, `disconnect`, `ip`, `startserver`, `hide-window`.
 - Verbose progress on stderr by default (`--quiet` silences); stdout stays machine-readable.
 - FortiClient app detection (powers `startserver` and the actionable not-running guidance).
+- Window hiding over CDP (`window.forticlient.closeMainWindow()`): `connect` hides the
+  window FortiClient pops on connect (`--show-window` opts out), plus a standalone
+  `hide-window`. `--hide-gui` only suppresses the window at startup, not on connect.
 - Zero runtime dependencies (Python stdlib only).
 
 ### Out of scope (v1) — explicit non-goals
