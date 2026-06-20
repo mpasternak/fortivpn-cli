@@ -35,8 +35,9 @@ Issues = "https://github.com/mpasternak/fortivpn-cli/issues"
 forti = "fortivpn.cli:main"
 
 [dependency-groups]
-# Installed by default on `uv sync` so the test suite is runnable out of the box.
-dev = ["pytest>=8"]
+# Installed by default on `uv sync` so the test suite + lint/format run out of the
+# box and reproducibly in CI (ruff is a real dev dep, not relied on from PATH).
+dev = ["pytest>=8", "ruff>=0.13"]
 
 [build-system]
 requires = ["hatchling"]
