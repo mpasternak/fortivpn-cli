@@ -1,6 +1,6 @@
 [project]
 name = "fvpnctl"
-version = "0.2.2"
+version = "0.2.3"
 requires-python = ">=3.11"
 readme = "README.md"
 description = "Control your FortiClient VPN from the macOS command line."

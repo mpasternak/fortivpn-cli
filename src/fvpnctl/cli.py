@@ -67,6 +67,7 @@ from fvpnctl import launcher, monitor
 from fvpnctl.cdp import CDPSession
 from fvpnctl.controller import FortiVPN
 from fvpnctl.errors import CDPEvaluateError, FortiError, NotRunningError
+from fvpnctl.spinner import Spinner
 
 # IPsec ``ipsec_state`` value meaning "tunnel up" (docs/how-it-works.md section 2
 # / design spec 4.2). The CLI only needs the CONNECTED sentinel; the controller
@@ -364,19 +365,30 @@ def _cmd_connect(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
     and returns; otherwise, on a CONNECTED terminal state, it fetches the VPN IP
     and prints ``CONNECTED <profile> <ip>``. The password is resolved inside the
     controller (from the Keychain) and is never accepted or printed here.
+
+    The waited path blocks in the controller's once-a-second poll loop while the
+    daemon negotiates, which otherwise looks frozen — so it is wrapped in a
+    :class:`~fvpnctl.spinner.Spinner` that animates a Braille throbber on stderr
+    (a single static line when piped, nothing under ``--quiet``; gated by
+    ``_VERBOSE`` exactly like :func:`report`). ``--no-wait`` returns immediately,
+    so it keeps the plain progress line instead.
     """
     wait = not args.no_wait
-    report(f"Connecting profile {args.profile}…")
-    state = fvpnctl.connect(
-        args.profile,
-        username=args.user,
-        wait=wait,
-        timeout=args.timeout,
-    )
+    msg = f"Connecting profile {args.profile}…"
 
     if not wait:
+        report(msg)
+        fvpnctl.connect(args.profile, username=args.user, wait=False, timeout=args.timeout)
         print(f"connecting {args.profile} ...")
         return 0
+
+    with Spinner(msg, stream=sys.stderr, enabled=_VERBOSE):
+        state = fvpnctl.connect(
+            args.profile,
+            username=args.user,
+            wait=True,
+            timeout=args.timeout,
+        )
 
     if state.ipsec_state == _CONNECTED:
         ip = fvpnctl.connection_ip(args.profile, _IPSEC)

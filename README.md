@@ -200,6 +200,9 @@ Global options:
 - `--verbose` / `--quiet` — progress messages. Verbose is **on by default** and writes
   progress to **stderr**; `--quiet` silences it. Either way `stdout` carries only the
   machine-readable result, so `--json` output and shell pipelines are byte-identical.
+  While `connect` waits for the tunnel (it polls once a second), verbose mode shows a
+  Braille throbber with an elapsed-seconds counter on a TTY, falls back to a single
+  static line when stderr is piped or redirected, and shows nothing under `--quiet`.
 
 `list` and `status` additionally accept `--json` for machine-readable output.
 
