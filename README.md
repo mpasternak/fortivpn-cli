@@ -312,14 +312,37 @@ tray for you (without quitting the app) — best effort, so a failure to hide ne
 otherwise-successful connect. Pass `--show-window` to keep the window up. (This only applies
 in the waited path; with `--no-wait` the popup happens after the command returns.)
 
-### `fvpnctl disconnect <profile>`
-
-Disconnect an IPsec profile.
+While it waits, `connect` shows live progress on a TTY (verbose mode). The **first** time you
+connect a profile there is no timing history, so it shows an indeterminate Braille throbber
+with an elapsed-seconds counter. fvpnctl records how long each successful connect took (per
+profile, the last 10 runs, under `~/.local/state/fvpnctl/` — overridable with
+`$FVPNCTL_STATE_DIR`), so on **subsequent** connects it shows a **progress bar** that fills
+toward the average of those past durations:
 
 ```console
-$ fvpnctl disconnect office
+$ fvpnctl connect office
+Connecting profile office…  [█████████████░░░░░░░░░░░] 54%  7s / ~13s
+```
+
+The bar never claims 100% until the tunnel is actually up, and the `7s / ~13s` tail stays
+honest if a connect runs longer than usual. Piped/redirected output falls back to a single
+static line, and `--quiet` shows nothing.
+
+### `fvpnctl disconnect [profile]`
+
+Disconnect a tunnel. The **profile argument is optional**: with no argument `disconnect`
+tears down whatever is connected right now (it reads the active connection from the daemon),
+so you don't have to remember which profile is up. Pass a name to target a specific profile.
+
+```console
+$ fvpnctl disconnect          # disconnect the active tunnel
+DISCONNECTED office
+$ fvpnctl disconnect office   # or name it explicitly
 DISCONNECTED office
 ```
+
+If nothing is connected, `disconnect` says so and exits `0` (the desired end state already
+holds), so it is safe to run unconditionally in scripts.
 
 ### `fvpnctl ip`
 

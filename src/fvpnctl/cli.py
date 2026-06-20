@@ -62,17 +62,19 @@ import argparse
 import json
 import os
 import sys
+import time
 
-from fvpnctl import launcher, monitor
+from fvpnctl import history, launcher, monitor
 from fvpnctl.cdp import CDPSession
 from fvpnctl.controller import FortiVPN
 from fvpnctl.errors import CDPEvaluateError, FortiError, NotRunningError
-from fvpnctl.spinner import Spinner
+from fvpnctl.spinner import ProgressBar, Spinner
 
-# IPsec ``ipsec_state`` value meaning "tunnel up" (docs/how-it-works.md section 2
-# / design spec 4.2). The CLI only needs the CONNECTED sentinel; the controller
-# owns the full enum.
+# IPsec ``ipsec_state`` values the CLI needs as sentinels (docs/how-it-works.md
+# section 2 / design spec 4.2). The controller owns the full enum; the CLI only
+# compares against "tunnel up" and "tunnel fully down".
 _CONNECTED = 2
+_DISCONNECTED = 0
 
 # Connection type for v1. Only IPsec is supported (SSL is out of scope); the CLI
 # always queries/derives with this type. See design spec section 2.
@@ -215,8 +217,23 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_connect.set_defaults(func=_cmd_connect)
 
-    p_disconnect = sub.add_parser("disconnect", parents=[common], help="Disconnect a profile.")
-    p_disconnect.add_argument("profile", help="The profile (connection_name) to disconnect.")
+    p_disconnect = sub.add_parser(
+        "disconnect",
+        parents=[common],
+        help="Disconnect the active tunnel (or a named profile).",
+        description=(
+            "Disconnect the currently active tunnel. The profile argument is "
+            "optional: with no argument it disconnects whatever is connected now "
+            "(read from the daemon's reported connection); pass a name to target a "
+            "specific profile."
+        ),
+    )
+    p_disconnect.add_argument(
+        "profile",
+        nargs="?",
+        default=None,
+        help="The profile (connection_name) to disconnect (default: the active one).",
+    )
     p_disconnect.set_defaults(func=_cmd_disconnect)
 
     p_ip = sub.add_parser(
@@ -367,11 +384,15 @@ def _cmd_connect(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
     controller (from the Keychain) and is never accepted or printed here.
 
     The waited path blocks in the controller's once-a-second poll loop while the
-    daemon negotiates, which otherwise looks frozen — so it is wrapped in a
-    :class:`~fvpnctl.spinner.Spinner` that animates a Braille throbber on stderr
-    (a single static line when piped, nothing under ``--quiet``; gated by
-    ``_VERBOSE`` exactly like :func:`report`). ``--no-wait`` returns immediately,
-    so it keeps the plain progress line instead.
+    daemon negotiates, which otherwise looks frozen — so it is wrapped in a live
+    indicator on stderr (a single static line when piped, nothing under
+    ``--quiet``; gated by ``_VERBOSE`` exactly like :func:`report`). When this
+    profile has connect-time history a :class:`~fvpnctl.spinner.ProgressBar`
+    fills toward the mean past duration (the ETA); with no history yet it falls
+    back to the indeterminate :class:`~fvpnctl.spinner.Spinner` throbber. Each
+    successful waited connect's wall-clock time is recorded so the *next* connect
+    can show the bar. ``--no-wait`` returns immediately, so it keeps the plain
+    progress line instead.
     """
     wait = not args.no_wait
     msg = f"Connecting profile {args.profile}…"
@@ -382,15 +403,27 @@ def _cmd_connect(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
         print(f"connecting {args.profile} ...")
         return 0
 
-    with Spinner(msg, stream=sys.stderr, enabled=_VERBOSE):
+    eta = _connect_eta(args.profile)
+    indicator = (
+        ProgressBar(msg, eta, stream=sys.stderr, enabled=_VERBOSE)
+        if eta is not None
+        else Spinner(msg, stream=sys.stderr, enabled=_VERBOSE)
+    )
+
+    start = time.monotonic()
+    with indicator:
         state = fvpnctl.connect(
             args.profile,
             username=args.user,
             wait=True,
             timeout=args.timeout,
         )
+    elapsed = time.monotonic() - start
 
     if state.ipsec_state == _CONNECTED:
+        # Record the duration only on a successful waited connect — that is what
+        # the user actually waited through and what the next ETA should average.
+        _record_connect_time(args.profile, elapsed)
         ip = fvpnctl.connection_ip(args.profile, _IPSEC)
         vpn_ip = ip.get("vpn_ip", "")
         # FortiClient pops its window on connect even under --hide-gui; hide it
@@ -398,7 +431,7 @@ def _cmd_connect(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
         # waited path: with --no-wait the popup happens after we return.
         if not args.show_window:
             _hide_window_best_effort(fvpnctl)
-        report(f"Connected: {vpn_ip}")
+        report(f"Connected: {vpn_ip} (in {elapsed:.0f}s)")
         print(f"CONNECTED {args.profile} {vpn_ip}")
     else:
         # Reached here only with wait=True and a non-connected terminal state the
@@ -408,10 +441,51 @@ def _cmd_connect(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
     return 0
 
 
+def _connect_eta(profile: str) -> float | None:
+    """Mean past connect time for ``profile`` (None ⇒ show the throbber instead).
+
+    Reads :func:`history.average`. The history is a best-effort UX aid: a missing,
+    corrupt, or unreadable store must never block a connect, so any
+    ``OSError``/``ValueError`` is reported (when verbose) and treated as "no ETA"
+    — the CLI then uses the indeterminate spinner.
+    """
+    try:
+        return history.average(profile)
+    except (OSError, ValueError) as e:
+        report(f"(connect-time history unavailable: {e})")
+        return None
+
+
+def _record_connect_time(profile: str, seconds: float) -> None:
+    """Persist this connect's duration; report and continue if it can't be saved.
+
+    A failed write (corrupt store, read-only dir) must not undo a connect that
+    already succeeded, so the error is surfaced (when verbose) and swallowed here.
+    """
+    try:
+        history.record(profile, seconds)
+    except (OSError, ValueError) as e:
+        report(f"(could not save connect time: {e})")
+
+
 def _cmd_disconnect(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
-    """``fvpnctl disconnect <profile>`` — tear down the tunnel and confirm."""
-    fvpnctl.disconnect(args.profile)
-    print(f"DISCONNECTED {args.profile}")
+    """``fvpnctl disconnect [profile]`` — tear down a tunnel and confirm.
+
+    With no ``profile`` it disconnects whatever is active: it reads ``state()``
+    and uses the daemon's reported ``connection_name``. If nothing is active it
+    says so and returns 0 — the desired end state (disconnected) already holds, so
+    ``fvpnctl disconnect`` is idempotent. An explicit ``profile`` is still honored
+    (and still works even if the daemon reports a different/empty active name).
+    """
+    profile = args.profile
+    if profile is None:
+        state = fvpnctl.state()
+        if state.ipsec_state == _DISCONNECTED or not state.name:
+            print("No active tunnel to disconnect.", file=sys.stderr)
+            return 0
+        profile = state.name
+    fvpnctl.disconnect(profile)
+    print(f"DISCONNECTED {profile}")
     return 0
 
 

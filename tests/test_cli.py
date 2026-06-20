@@ -142,13 +142,15 @@ class _FakeProfile:
 
 
 @pytest.fixture(autouse=True)
-def patched(monkeypatch):
+def patched(monkeypatch, tmp_path):
     """Swap the two seams and reset per-test state.
 
     Every test gets fresh ``FakeSession.instances`` and ``FakeController.config``
     so assertions about construction args / routed calls never bleed between
     tests. The ``FORTI_CDP_PORT`` env var is cleared so the default-port tests
-    are not perturbed by the developer's environment.
+    are not perturbed by the developer's environment. ``FVPNCTL_STATE_DIR`` is
+    pointed at a throwaway ``tmp_path`` so the connect-time history the CLI now
+    reads/writes never touches the developer's real state dir.
     """
     FakeSession.instances = []
     FakeController.config = {}
@@ -156,6 +158,8 @@ def patched(monkeypatch):
     monkeypatch.setattr(cli, "CDPSession", FakeSession)
     monkeypatch.setattr(cli, "FortiVPN", FakeController)
     monkeypatch.delenv("FORTI_CDP_PORT", raising=False)
+    monkeypatch.setenv("FVPNCTL_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     return FakeController
 
 
@@ -343,6 +347,30 @@ def test_disconnect_routes_and_prints(capsys):
     assert out == "DISCONNECTED office"
 
 
+def test_disconnect_no_arg_uses_active_profile(capsys):
+    # No profile given → read state(), disconnect whatever the daemon reports.
+    FakeController.config["state"] = FakeState(ipsec_state=2, name="apoz")
+    FakeController.config["disconnect"] = None
+
+    rc = cli.main(["disconnect"])
+
+    assert rc == 0
+    disconnect_calls = [c for c in FakeController.last.calls if c[0] == "disconnect"]
+    assert disconnect_calls[0][1][0] == "apoz"
+    assert capsys.readouterr().out.strip() == "DISCONNECTED apoz"
+
+
+def test_disconnect_no_arg_when_nothing_connected(capsys):
+    # Idempotent: nothing active → say so, never call DisconnectTunnel, exit 0.
+    FakeController.config["state"] = FakeState(ipsec_state=0, name="", state_label="DISCONNECTED")
+
+    rc = cli.main(["disconnect"])
+
+    assert rc == 0
+    assert [c for c in FakeController.last.calls if c[0] == "disconnect"] == []
+    assert "no active" in capsys.readouterr().err.lower()
+
+
 def test_connect_hides_window_by_default():
     FakeController.config["connect"] = FakeState(ipsec_state=2, name="office")
     FakeController.config["connection_ip"] = {"vpn_ip": "172.16.200.2"}
@@ -386,6 +414,55 @@ def test_connect_hide_failure_does_not_fail_connect(capsys):
 
     assert rc == 0
     assert "CONNECTED" in capsys.readouterr().out
+
+
+def test_connect_records_duration_for_next_time():
+    # A successful waited connect persists its duration (isolated tmp state dir),
+    # so the NEXT connect can show a progress bar.
+    from fvpnctl import history
+
+    FakeController.config["connect"] = FakeState(ipsec_state=2, name="apoz")
+    FakeController.config["connection_ip"] = {"vpn_ip": "10.0.0.2"}
+
+    assert history.average("apoz") is None  # nothing recorded yet
+    rc = cli.main(["connect", "apoz"])
+
+    assert rc == 0
+    assert history.average("apoz") is not None  # one measurement now stored
+
+
+def test_connect_with_history_succeeds_via_progress_bar_branch(capsys):
+    # Pre-seeded history → eta is not None → the ProgressBar branch is taken.
+    # Output is captured (non-TTY) so the bar renders as its static line; the
+    # connect must still succeed and print the machine-readable result.
+    from fvpnctl import history
+
+    history.record("apoz", 8.0)
+    FakeController.config["connect"] = FakeState(ipsec_state=2, name="apoz")
+    FakeController.config["connection_ip"] = {"vpn_ip": "10.0.0.2"}
+
+    rc = cli.main(["connect", "apoz"])
+
+    assert rc == 0
+    assert "CONNECTED apoz 10.0.0.2" in capsys.readouterr().out
+
+
+def test_connect_history_failure_does_not_break_connect(monkeypatch, capsys):
+    # A corrupt/unreadable history store must never block a connect: the ETA read
+    # degrades to the throbber and the connect still succeeds.
+    from fvpnctl import history
+
+    def boom(_profile):
+        raise ValueError("corrupt history")
+
+    monkeypatch.setattr(history, "average", boom)
+    FakeController.config["connect"] = FakeState(ipsec_state=2, name="apoz")
+    FakeController.config["connection_ip"] = {"vpn_ip": "10.0.0.2"}
+
+    rc = cli.main(["connect", "apoz"])
+
+    assert rc == 0
+    assert "CONNECTED apoz" in capsys.readouterr().out
 
 
 def test_hide_window_command_routes():
