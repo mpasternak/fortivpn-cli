@@ -4,11 +4,31 @@ version = "0.1.0"
 requires-python = ">=3.11"
 readme = "README.md"
 description = "Control FortiClient IPsec VPN on macOS via the Chrome DevTools Protocol (no GUI automation)."
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Michał Pasternak" }]
+keywords = ["forticlient", "fortinet", "vpn", "ipsec", "macos", "cdp", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Networking",
+]
 # Zero runtime dependencies is a hard design requirement: the tool uses only the
 # Python standard library (socket, json, urllib, subprocess, argparse). See the
 # design spec sections 2 and 8 for the rationale (no third-party attack surface,
 # trivially auditable, runs against any stock Python 3.11+).
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/mpasternak/fortivpn-cli"
+Repository = "https://github.com/mpasternak/fortivpn-cli"
+Issues = "https://github.com/mpasternak/fortivpn-cli/issues"
 
 [project.scripts]
 # cli.py is owned by another agent and does not exist yet; this is metadata only.

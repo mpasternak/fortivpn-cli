@@ -1,5 +1,7 @@
 # fortivpn — control FortiClient IPsec VPN on macOS via the Chrome DevTools Protocol
 
+[![CI](https://github.com/mpasternak/fortivpn-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/mpasternak/fortivpn-cli/actions/workflows/ci.yml)
+
 A macOS command-line tool (`forti`) and reusable Python library that **connects,
 disconnects, and reports the status of FortiClient IPsec VPN profiles — with no GUI
 automation at all.** Instead of clicking buttons through Accessibility APIs, it attaches

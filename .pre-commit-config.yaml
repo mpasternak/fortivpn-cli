@@ -11,6 +11,7 @@ repos:
       - id: check-added-large-files
       - id: check-merge-conflict
       - id: mixed-line-ending
+      - id: detect-private-key # critical for OSS: blocks committing private keys
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.13.0
