@@ -4,7 +4,7 @@
 
 A small command-line tool (`fvpnctl`) and Python library for **connecting, disconnecting,
 and checking the status of FortiClient VPN profiles from the terminal** — handy for scripts,
-automation, and headless or over-SSH use, with no GUI needed. It works with a FortiClient you
+automation, and headless or over-SSH use. It works with a FortiClient you
 already have running, talking to it over a local debugging port.
 
 - Zero runtime dependencies (Python standard library only).

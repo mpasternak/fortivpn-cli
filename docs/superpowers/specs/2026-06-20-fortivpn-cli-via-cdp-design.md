@@ -9,8 +9,8 @@ macOS).
 ## 1. Goal
 
 A macOS command-line tool (and reusable Python library) that connects, disconnects,
-and reports the status of FortiClient IPsec VPN profiles from the terminal **without any
-GUI automation** — by attaching to a running FortiClient over its local debugging port.
+and reports the status of FortiClient IPsec VPN profiles from the terminal by attaching to
+a running FortiClient over its local debugging port.
 Separate project from the AppleScript/AX variant (`~/Programowanie/fortivpn-cli-macos`).
 
 ## 2. Scope
@@ -42,7 +42,7 @@ Separate project from the AppleScript/AX variant (`~/Programowanie/fortivpn-cli-
 
 The control path was validated against FortiClient 7.4.x on macOS: a full
 connect / status / disconnect cycle was driven through FortiClient's local debugging
-port, headless, with no GUI automation. `fvpnctl` attaches to a FortiClient the user
+port, headless. `fvpnctl` attaches to a FortiClient the user
 launches with `--remote-debugging-port`, asks it to perform the VPN operation, and reads
 back the connection state (a small integer: `0=DISCONNECTED 1=CONNECTING 2=CONNECTED
 3=XAUTH 4=RECONNECTING`). The transport is a dependency-free stdlib client (the runtime
@@ -183,8 +183,8 @@ fortivpn-cli-via-rdp/
 Documentation is a first-class deliverable, not an afterthought. Every artifact must
 explain **how** it works *and* **why** it is built that way — rationale, not just usage.
 
-- **README.md** — what the tool does and **why this approach** (attach-only, no GUI
-  automation; why FortiClient must run headless + `--remote-debugging-port`); setup
+- **README.md** — what the tool does and **why this approach** (attach-only; why
+  FortiClient must run headless + `--remote-debugging-port`); setup
   **how-to** (sample LaunchAgent plist, adding the `forti-vpn-<profile>` Keychain item);
   per-command usage; the security note (credentials never logged / not in argv/env);
   links to `docs/how-it-works.md` as the "why it works" reference.
