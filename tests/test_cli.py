@@ -1,8 +1,8 @@
-"""Tests for the ``forti`` CLI (``fortivpn.cli.main``).
+"""Tests for the ``fvpnctl`` CLI (``fvpnctl.cli.main``).
 
 These tests are CI-safe: there is NO real FortiClient, no real CDP socket, and
 no real Keychain. The CLI references ``CDPSession`` and ``FortiVPN`` as
-module-level names (``fortivpn.cli.CDPSession`` / ``fortivpn.cli.FortiVPN``), so
+module-level names (``fvpnctl.cli.CDPSession`` / ``fvpnctl.cli.FortiVPN``), so
 every test monkeypatches those two seams:
 
 * ``CDPSession`` is replaced by :class:`FakeSession` — a no-op context manager
@@ -31,8 +31,8 @@ import json
 
 import pytest
 
-from fortivpn import cli
-from fortivpn.errors import (
+from fvpnctl import cli
+from fvpnctl.errors import (
     CDPEvaluateError,
     ConnectTimeout,
     FortiClientNotFoundError,
@@ -592,7 +592,7 @@ def test_quiet_does_not_pollute_json_stdout(capsys):
 
 
 class _FakeLauncher:
-    """Stand-in for ``fortivpn.cli.launcher`` capturing start_server's call."""
+    """Stand-in for ``fvpnctl.cli.launcher`` capturing start_server's call."""
 
     def __init__(self):
         self.calls = []
@@ -692,7 +692,7 @@ def test_not_running_guidance_suggests_startserver_no_spike(monkeypatch, capsys)
     assert rc == 3
     err = capsys.readouterr().err
     # The factual message + actionable guidance, all on stderr.
-    assert "forti startserver" in err
+    assert "fvpnctl startserver" in err
     # Because the executable was found, the exact launch command is shown.
     assert "--remote-debugging-port=9222" in err
     assert "/Applications/FortiClient.app/x" in err
@@ -711,13 +711,13 @@ def test_not_running_guidance_shows_download_hint_when_not_installed(monkeypatch
 
     assert rc == 3
     err = capsys.readouterr().err
-    assert "forti startserver" in err
+    assert "fvpnctl startserver" in err
     assert "DOWNLOAD-HINT-SENTINEL" in err
     assert "SPIKE" not in err
 
 
 def test_global_flags_after_subcommand():
-    # Users naturally write `forti status --quiet`; the global flags must parse in
+    # Users naturally write `fvpnctl status --quiet`; the global flags must parse in
     # that position, not only before the subcommand. Regression for the
     # "unrecognized arguments: --quiet" bug.
     parser = cli._build_parser()

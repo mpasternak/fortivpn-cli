@@ -12,7 +12,7 @@ wheels = [
 ]
 
 [[package]]
-name = "fortivpn"
+name = "fvpnctl"
 version = "0.1.0"
 source = { editable = "." }
 

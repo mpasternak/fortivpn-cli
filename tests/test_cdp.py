@@ -1,4 +1,4 @@
-"""Tests for the dependency-free CDP transport (``fortivpn.cdp``).
+"""Tests for the dependency-free CDP transport (``fvpnctl.cdp``).
 
 These are CI-safe: they never touch a real FortiClient or a real network. The
 module is deliberately factored so the two failure-prone parts can be tested in
@@ -18,8 +18,8 @@ import struct
 
 import pytest
 
-from fortivpn import cdp
-from fortivpn.errors import CDPEvaluateError, NotRunningError
+from fvpnctl import cdp
+from fvpnctl.errors import CDPEvaluateError, NotRunningError
 
 # ---------------------------------------------------------------------------
 # WebSocket framing — pure functions.

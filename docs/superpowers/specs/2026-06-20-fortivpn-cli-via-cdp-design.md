@@ -1,4 +1,4 @@
-# Design: `fortivpn` — Python library + `forti` CLI controlling FortiClient via CDP
+# Design: `fvpnctl` — Python library + `fvpnctl` CLI for controlling FortiClient VPN
 
 **Date:** 2026-06-20
 **Status:** Approved (brainstorming)
@@ -9,10 +9,9 @@ macOS).
 ## 1. Goal
 
 A macOS command-line tool (and reusable Python library) that connects, disconnects,
-and reports status of FortiClient IPsec VPN profiles **without any GUI automation** —
-driving the Electron renderer's internal `window.guimessenger` API over the Chrome
-DevTools Protocol (CDP). Separate project from the AppleScript/AX variant
-(`~/Programowanie/fortivpn-cli-macos`).
+and reports the status of FortiClient IPsec VPN profiles from the terminal **without any
+GUI automation** — by attaching to a running FortiClient over its local debugging port.
+Separate project from the AppleScript/AX variant (`~/Programowanie/fortivpn-cli-macos`).
 
 ## 2. Scope
 
@@ -24,9 +23,8 @@ DevTools Protocol (CDP). Separate project from the AppleScript/AX variant
 - Commands: `list`, `status`, `connect`, `disconnect`, `ip`, `startserver`, `hide-window`.
 - Verbose progress on stderr by default (`--quiet` silences); stdout stays machine-readable.
 - FortiClient app detection (powers `startserver` and the actionable not-running guidance).
-- Window hiding over CDP (`window.forticlient.closeMainWindow()`): `connect` hides the
-  window FortiClient pops on connect (`--show-window` opts out), plus a standalone
-  `hide-window`. `--hide-gui` only suppresses the window at startup, not on connect.
+- Window hiding: `connect` sends FortiClient's window back to the tray (it pops on connect
+  even under `--hide-gui`); `--show-window` opts out, plus a standalone `hide-window`.
 - Zero runtime dependencies (Python stdlib only).
 
 ### Out of scope (v1) — explicit non-goals
@@ -40,26 +38,20 @@ DevTools Protocol (CDP). Separate project from the AppleScript/AX variant
 - **Default profile / config file.** Profile name is always passed explicitly.
 - **Profile management** (create/delete/rename/import), even though the API exposes it.
 
-## 3. Validated foundation (from spike)
+## 3. Validated foundation
 
-- Launch (user's responsibility): `FortiClient --hide-gui --remote-debugging-port=9222`.
-- Renderer target: `GET http://127.0.0.1:<port>/json` → the single `page`
-  (`base.html`); use its `webSocketDebuggerUrl`.
-- All `window.guimessenger` methods are invoked via `Runtime.evaluate`
-  (`awaitPromise:true, returnByValue:true`) and return a **Promise → JSON string**.
-- Connect sequence (order matters): **`SetGuiHandle()` first** (without it
-  `ConnectTunnel` returns `["1"]` but the daemon never negotiates and state stays `0`),
-  then `ConnectTunnel(JSON.stringify(obj))`, then poll `getConnectionState()`.
-- `connection_type` is `"ipsec"` / `"ssl"`. State enum:
-  `0=DISCONNECTED 1=CONNECTING 2=CONNECTED 3=XAUTH 4=RECONNECTING`.
-- `getConnectionIP` / `getConnectionInfo` / `GetIPSecGeneralInfo` require a JSON arg
-  `JSON.stringify({connection_name, connection_type})`.
-- Node on this machine is v20 (no global `WebSocket`) → CDP client is a stdlib raw
-  WebSocket implementation.
+The control path was validated against FortiClient 7.4.x on macOS: a full
+connect / status / disconnect cycle was driven through FortiClient's local debugging
+port, headless, with no GUI automation. `fvpnctl` attaches to a FortiClient the user
+launches with `--remote-debugging-port`, asks it to perform the VPN operation, and reads
+back the connection state (a small integer: `0=DISCONNECTED 1=CONNECTING 2=CONNECTED
+3=XAUTH 4=RECONNECTING`). The transport is a dependency-free stdlib client (the runtime
+FortiClient ships has no global `WebSocket`). See [`docs/how-it-works.md`](../../how-it-works.md)
+for the conceptual overview.
 
 ## 4. Architecture
 
-Five small, independently-testable modules under `src/fortivpn/`:
+Five small, independently-testable modules under `src/fvpnctl/`:
 
 ### 4.1 `cdp.py` — `CDPSession` (transport, VPN-agnostic)
 Promotion of the spike's `cdp_eval.py`. Dependency-free raw-WebSocket CDP client.
@@ -78,8 +70,9 @@ class CDPSession:
 - `evaluate()` raises `CDPEvaluateError` when the renderer reports `exceptionDetails`.
 - Knows nothing about VPN — pure transport.
 
-### 4.2 `controller.py` — `FortiVPN` (the `window.guimessenger` contract)
-Wraps a `CDPSession`; encodes the validated flow and the v1 guards.
+### 4.2 `controller.py` — `FortiVPN` (the FortiClient operations)
+Wraps a `CDPSession`; maps high-level VPN operations onto FortiClient and encodes the
+v1 guards.
 
 ```
 @dataclass
@@ -90,24 +83,25 @@ class ConnectionState: ipsec_state: int; ssl_state: int; name: str; raw: dict
 
 class FortiVPN:
     def __init__(self, session: CDPSession): ...
-    def profiles(self) -> list[Profile]                       # GetVPNConnectionList
-    def profile_info(self, name: str, ctype="ipsec") -> dict  # GetIPSecGeneralInfo
-    def state(self) -> ConnectionState                        # getConnectionState
-    def connection_ip(self, name, ctype) -> dict              # getConnectionIP
-    def connection_info(self, name, ctype) -> dict            # getConnectionInfo
+    def profiles(self) -> list[Profile]
+    def profile_info(self, name: str, ctype="ipsec") -> dict
+    def state(self) -> ConnectionState
+    def connection_ip(self, name, ctype) -> dict
+    def connection_info(self, name, ctype) -> dict
     def connect(self, name, *, username=None, password=None,
                 wait=True, timeout=30.0, poll=1.0) -> ConnectionState
-    def disconnect(self, name, ctype="ipsec") -> None         # DisconnectTunnel
-    def cancel(self) -> None                                  # CancelTunnel
+    def disconnect(self, name, ctype="ipsec") -> None
+    def cancel(self) -> None
 ```
 
 `connect()` algorithm:
 1. Resolve the `Profile`; if `type != "ipsec"` → `UnsupportedError`.
 2. `username` ← arg or `profile_info(name)["username"]`.
 3. `password` ← arg or `keychain.get_password(name, username)`.
-4. `SetGuiHandle()` (assert truthy).
-5. `ConnectTunnel(JSON.stringify({connection_name, connection_type:"ipsec", username,
-   password, save_password:"0", always_up:"0", auto_connect:"0", saml_error:1}))`.
+4. Register the session with FortiClient (a required pre-step — without it the daemon
+   accepts the request but never starts negotiating).
+5. Submit the connect request to FortiClient with the profile, type, username, password
+   and the relevant connect options.
 6. If `wait`: poll `state()` every `poll`s until `ipsec_state==2` (→ return);
    `==3` (XAUTH) → `UnsupportedError("2FA not supported in v1")`; dropped back to `0`
    *after* having reached a non-zero state → `ConnectFailed`; if `timeout` elapses
@@ -136,11 +130,11 @@ the mapped code. No silent excepts; suppression only with a narrow type + commen
 
 | Command | Behaviour | Output (human) | `--json` |
 |---------|-----------|----------------|----------|
-| `forti list` | `profiles()` | table: name, type, server (`remote_gateway` via `profile_info`) | array of profile dicts |
-| `forti status` | `state()`; if connected, derive `connection_name`/`type` from it and add `connection_info`/`connection_ip` | `CONNECTED office 172.16.200.2 (00:01:45, ↓1.6KB ↑0)` or `DISCONNECTED` | state dict |
-| `forti connect <profile> [-u USER] [--no-wait] [--timeout S]` | `connect()` | progress line(s) → `CONNECTED <profile> <vpn_ip>` | — |
-| `forti disconnect <profile>` | `disconnect()` | `DISCONNECTED <profile>` | — |
-| `forti ip` | read `state()`; if `ipsec_state==2`, `connection_ip(name, "ipsec")` using that state's `connection_name`; else exit `1` with "not connected" on stderr | `172.16.200.2` | — |
+| `fvpnctl list` | `profiles()` | table: name, type, server (`remote_gateway` via `profile_info`) | array of profile dicts |
+| `fvpnctl status` | `state()`; if connected, derive `connection_name`/`type` from it and add `connection_info`/`connection_ip` | `CONNECTED office 172.16.200.2 (00:01:45, ↓1.6KB ↑0)` or `DISCONNECTED` | state dict |
+| `fvpnctl connect <profile> [-u USER] [--no-wait] [--timeout S]` | `connect()` | progress line(s) → `CONNECTED <profile> <vpn_ip>` | — |
+| `fvpnctl disconnect <profile>` | `disconnect()` | `DISCONNECTED <profile>` | — |
+| `fvpnctl ip` | read `state()`; if `ipsec_state==2`, `connection_ip(name, "ipsec")` using that state's `connection_name`; else exit `1` with "not connected" on stderr | `172.16.200.2` | — |
 
 ### Exit codes
 `0` success · `2` usage (argparse) · `3` `NotRunningError` · `4` `KeychainError` ·
@@ -172,10 +166,10 @@ ignoring `OSError` on socket close during teardown).
 
 ```
 fortivpn-cli-via-rdp/
-  pyproject.toml          # uv-managed; project.scripts: forti = "fortivpn.cli:main"
+  pyproject.toml          # uv-managed; project.scripts: fvpnctl = "fvpnctl.cli:main"
   README.md               # usage + sample LaunchAgent plist (headless+debug autostart)
   .pre-commit-config.yaml # ruff (lint+format)
-  src/fortivpn/{__init__,cdp,controller,keychain,errors,cli}.py
+  src/fvpnctl/{__init__,cdp,controller,keychain,errors,cli}.py
   tests/{test_cdp,test_controller,test_keychain,test_cli}.py
   tests/manual/           # attended live tests, skipped by default
   docs/how-it-works.md    # validated control path / "why it works"
@@ -189,16 +183,16 @@ fortivpn-cli-via-rdp/
 Documentation is a first-class deliverable, not an afterthought. Every artifact must
 explain **how** it works *and* **why** it is built that way — rationale, not just usage.
 
-- **README.md** — what the tool does and **why this approach** (CDP/attach-only, no GUI
+- **README.md** — what the tool does and **why this approach** (attach-only, no GUI
   automation; why FortiClient must run headless + `--remote-debugging-port`); setup
   **how-to** (sample LaunchAgent plist, adding the `forti-vpn-<profile>` Keychain item);
   per-command usage; the security note (credentials never logged / not in argv/env);
   links to `docs/how-it-works.md` as the "why it works" reference.
 - **Module docstrings** — each module opens with a docstring covering its purpose, how
-  it works, and the *why* behind non-obvious choices: `cdp.py` (raw-WebSocket because
-  node v20 lacks a global `WebSocket`), `controller.py` (**why `SetGuiHandle()` must
-  precede `ConnectTunnel`** — daemon won't negotiate otherwise), the JSON-arg
-  requirement for `getConnectionIP`/`getConnectionInfo`/`GetIPSecGeneralInfo`.
+  it works, and the *why* behind non-obvious choices: `cdp.py` (a dependency-free
+  stdlib transport, because the runtime FortiClient ships lacks a global `WebSocket`),
+  `controller.py` (why the session must be registered with FortiClient before the connect
+  call — otherwise the daemon won't begin negotiating).
 - **Inline comments** — for every empirically-derived constant or ordering that a reader
   couldn't infer from the code alone, with a one-line "why" (and a pointer to
   `docs/how-it-works.md`).
@@ -207,6 +201,5 @@ explain **how** it works *and* **why** it is built that way — rationale, not j
 
 ## 10. Future / deferred
 
-SSL VPN support; interactive 2FA (XAUTH state + `token`/`SendToken`, needs an attended
-test on a 2FA profile); default-profile config; profile management commands. Each is a
-separate spec → plan cycle.
+SSL VPN support; interactive 2FA (needs an attended test on a 2FA profile);
+default-profile config; profile management commands. Each is a separate spec → plan cycle.

@@ -2,7 +2,7 @@
 
 What this is
 ------------
-``FortiVPN`` wraps a connected :class:`~fortivpn.cdp.CDPSession` and turns the
+``FortiVPN`` wraps a connected :class:`~fvpnctl.cdp.CDPSession` and turns the
 raw, validated ``window.guimessenger`` calls into a small, typed API:
 ``profiles()``, ``state()``, ``connect()``, ``disconnect()`` and friends. The
 transport layer (``cdp.py``) knows nothing about VPNs; all the
@@ -46,8 +46,8 @@ import json
 import time
 from dataclasses import dataclass
 
-from fortivpn import keychain
-from fortivpn.errors import ConnectFailed, ConnectTimeout, UnsupportedError
+from fvpnctl import keychain
+from fvpnctl.errors import ConnectFailed, ConnectTimeout, UnsupportedError
 
 # Connection-state enum reported in ``ipsec_state`` (docs/how-it-works.md section 2 / design
 # spec 4.2). These integers come straight from the daemon; the labels are ours.
@@ -134,7 +134,7 @@ class ConnectionState:
 class FortiVPN:
     """Typed controller over the validated ``window.guimessenger`` flow.
 
-    Wraps a *connected* :class:`~fortivpn.cdp.CDPSession`. Each public method
+    Wraps a *connected* :class:`~fvpnctl.cdp.CDPSession`. Each public method
     maps to one or more ``window.guimessenger`` calls, parsing the JSON-string
     returns into Python objects (see the module docstring for why parsing is
     required). The class holds no VPN credentials beyond the lifetime of a single
@@ -329,7 +329,7 @@ class FortiVPN:
             if profile.name == name:
                 return profile
         raise UnsupportedError(
-            f"No VPN profile named {name!r} (run `forti list` to see configured profiles)."
+            f"No VPN profile named {name!r} (run `fvpnctl list` to see configured profiles)."
         )
 
     def _wait_for_connection(self, *, timeout: float, poll: float) -> ConnectionState:

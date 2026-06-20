@@ -29,9 +29,9 @@ import json
 
 import pytest
 
-from fortivpn import controller as controller_module
-from fortivpn.controller import ConnectionState, FortiVPN, Profile
-from fortivpn.errors import ConnectFailed, ConnectTimeout, UnsupportedError
+from fvpnctl import controller as controller_module
+from fvpnctl.controller import ConnectionState, FortiVPN, Profile
+from fvpnctl.errors import ConnectFailed, ConnectTimeout, UnsupportedError
 
 
 class FakeSession:

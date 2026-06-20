@@ -1,4 +1,4 @@
-"""Tests for FortiClient detection + the CDP-server launcher (``fortivpn.launcher``).
+"""Tests for FortiClient detection + the CDP-server launcher (``fvpnctl.launcher``).
 
 These are CI-safe: there is NO real FortiClient on disk, no real network, no
 real subprocess, and no real clock. Every external touchpoint is mocked:
@@ -22,8 +22,8 @@ import urllib.error
 
 import pytest
 
-from fortivpn import launcher
-from fortivpn.errors import FortiClientNotFoundError, FortiError
+from fvpnctl import launcher
+from fvpnctl.errors import FortiClientNotFoundError, FortiError
 
 # ---------------------------------------------------------------------------
 # find_forticlient — monkeypatch path existence + plistlib.

@@ -39,7 +39,7 @@ Why the ``NotRunningError`` message stays factual
 -------------------------------------------------
 ``NotRunningError`` here reports only *what failed* (the URL it could not reach
 and the underlying reason) — it deliberately carries **no** launch instructions
-or doc pointers. Telling the user *how to fix it* (run ``forti startserver``,
+or doc pointers. Telling the user *how to fix it* (run ``fvpnctl startserver``,
 the exact launch command, where to download FortiClient) is the CLI's job
 (``cli.py``), which has access to ``launcher`` to detect the installed
 executable and tailor the advice. Keeping the transport decoupled means the
@@ -55,7 +55,7 @@ import struct
 import urllib.request
 from collections.abc import Callable
 
-from fortivpn.errors import CDPEvaluateError, NotRunningError
+from fvpnctl.errors import CDPEvaluateError, NotRunningError
 
 # WebSocket opcodes (RFC 6455 section 5.2) we care about.
 _OPCODE_TEXT = 0x1
@@ -163,7 +163,7 @@ class CDPSession:
             # OSError covers ConnectionRefusedError, URLError's socket failures,
             # timeouts, DNS errors — i.e. "nothing is listening on the port".
             # FACTUAL message only: name the URL and the reason. The CLI adds the
-            # "run forti startserver / launch command / download" guidance.
+            # "run fvpnctl startserver / launch command / download" guidance.
             raise NotRunningError(
                 f"Cannot reach FortiClient's CDP endpoint at {url}: {exc}."
             ) from exc

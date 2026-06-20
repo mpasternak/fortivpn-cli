@@ -32,7 +32,7 @@ environment; only ``security`` itself ever holds it.
 
 import subprocess
 
-from fortivpn.errors import KeychainError
+from fvpnctl.errors import KeychainError
 
 
 def get_password(profile: str, username: str) -> str:

@@ -1,11 +1,11 @@
-"""The ``forti`` command-line interface — argparse over the ``FortiVPN`` controller.
+"""The ``fvpnctl`` command-line interface — argparse over the ``FortiVPN`` controller.
 
 What this is
 ------------
-``main(argv)`` is the entry point behind the ``forti`` console script
-(``forti = fortivpn.cli:main``). It parses arguments, opens an attach-only
-:class:`~fortivpn.cdp.CDPSession` to an already-running FortiClient, wraps it in
-a :class:`~fortivpn.controller.FortiVPN`, and dispatches one of the five
+``main(argv)`` is the entry point behind the ``fvpnctl`` console script
+(``fvpnctl = fvpnctl.cli:main``). It parses arguments, opens an attach-only
+:class:`~fvpnctl.cdp.CDPSession` to an already-running FortiClient, wraps it in
+a :class:`~fvpnctl.controller.FortiVPN`, and dispatches one of the five
 subcommands (``list``, ``status``, ``connect``, ``disconnect``, ``ip``) to the
 matching controller method. The subcommands map 1:1 to controller calls; this
 module owns only argument parsing, human/JSON formatting, and the error→exit-code
@@ -16,15 +16,15 @@ Why attach-only
 The tool never starts, stops, or restarts FortiClient. It connects to a
 FortiClient the user already launched headless with ``--remote-debugging-port``
 (see docs/how-it-works.md section 1). If the debugging port is unreachable,
-``CDPSession`` raises :class:`~fortivpn.errors.NotRunningError`; the CLI surfaces
+``CDPSession`` raises :class:`~fvpnctl.errors.NotRunningError`; the CLI surfaces
 the factual message as a stderr line + exit code 3 and then prints actionable
-guidance (suggesting ``forti startserver`` or the exact launch command). The one
+guidance (suggesting ``fvpnctl startserver`` or the exact launch command). The one
 exception to attach-only is the explicit ``startserver`` subcommand, which uses
 ``launcher`` to start FortiClient headless — see :func:`_cmd_startserver`.
 
 The type → exit-code contract
 -----------------------------
-Every *expected* failure is a :class:`~fortivpn.errors.FortiError` subclass that
+Every *expected* failure is a :class:`~fvpnctl.errors.FortiError` subclass that
 carries its own ``exit_code`` (defined in ``errors.py`` to match design spec
 section 5). :func:`main` catches ``FortiError`` once, prints its message to
 stderr, and returns ``e.exit_code``. So the failure *type* selects the exit code:
@@ -46,8 +46,8 @@ inside the controller (from the Keychain) and never receives, prints, or logs
 it here.
 
 ``CDPSession``, ``FortiVPN`` and ``launcher`` are referenced as module-level
-names so the test suite can monkeypatch ``fortivpn.cli.CDPSession`` /
-``fortivpn.cli.FortiVPN`` / ``fortivpn.cli.launcher`` with CI-safe fakes (no real
+names so the test suite can monkeypatch ``fvpnctl.cli.CDPSession`` /
+``fvpnctl.cli.FortiVPN`` / ``fvpnctl.cli.launcher`` with CI-safe fakes (no real
 socket, no real FortiClient, no real subprocess).
 
 Verbose / quiet
@@ -63,10 +63,10 @@ import json
 import os
 import sys
 
-from fortivpn import launcher
-from fortivpn.cdp import CDPSession
-from fortivpn.controller import FortiVPN
-from fortivpn.errors import CDPEvaluateError, FortiError, NotRunningError
+from fvpnctl import launcher
+from fvpnctl.cdp import CDPSession
+from fvpnctl.controller import FortiVPN
+from fvpnctl.errors import CDPEvaluateError, FortiError, NotRunningError
 
 # IPsec ``ipsec_state`` value meaning "tunnel up" (docs/how-it-works.md section 2
 # / design spec 4.2). The CLI only needs the CONNECTED sentinel; the controller
@@ -89,7 +89,7 @@ def report(msg: str) -> None:
 
     Why stderr (never stdout): stdout is the machine-readable channel — the JSON
     blob, the IP, the status line that scripts parse. Routing all human progress
-    to stderr keeps ``forti ... --json`` and shell pipelines byte-for-byte
+    to stderr keeps ``fvpnctl ... --json`` and shell pipelines byte-for-byte
     identical whether the user runs verbose or quiet. Doubles as the
     ``on_info`` callback for :func:`launcher.start_server`, so launch progress
     flows through the same gate.
@@ -107,7 +107,7 @@ def _build_parser() -> argparse.ArgumentParser:
     on ``func`` via ``set_defaults`` so :func:`main` can dispatch generically.
     """
     # Global options accepted both BEFORE and AFTER the subcommand (users naturally
-    # write `forti status --quiet`). They live on a shared parent parser applied to
+    # write `fvpnctl status --quiet`). They live on a shared parent parser applied to
     # the top-level parser AND every subparser. Defaults are argparse.SUPPRESS so a
     # subparser re-declaring them does not clobber a value given at the top level
     # (the classic argparse `parents` gotcha); main() applies the real defaults via
@@ -143,7 +143,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     parser = argparse.ArgumentParser(
-        prog="forti",
+        prog="fvpnctl",
         parents=[common],
         description=(
             "Control an already-running FortiClient IPsec VPN over the Chrome "
@@ -238,19 +238,19 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cmd_list(forti: FortiVPN, args: argparse.Namespace) -> int:
-    """``forti list`` — print profiles as a table (or JSON with ``--json``).
+def _cmd_list(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
+    """``fvpnctl list`` — print profiles as a table (or JSON with ``--json``).
 
     ``server`` is the IPsec gateway (``profile_info(name)["remote_gateway"]``);
     it is only queried for ``ipsec`` profiles and left blank otherwise, since
     ``GetIPSecGeneralInfo`` is IPsec-specific.
     """
-    profiles = forti.profiles()
+    profiles = fvpnctl.profiles()
     rows = []
     for profile in profiles:
         server = ""
         if profile.type == _IPSEC:
-            server = forti.profile_info(profile.name).get("remote_gateway", "")
+            server = fvpnctl.profile_info(profile.name).get("remote_gateway", "")
         rows.append({"name": profile.name, "type": profile.type, "server": server})
 
     if args.json:
@@ -285,15 +285,15 @@ def _print_table(rows: list[dict]) -> None:
         )
 
 
-def _cmd_status(forti: FortiVPN, args: argparse.Namespace) -> int:
-    """``forti status`` — print the tunnel state, enriched when connected.
+def _cmd_status(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
+    """``fvpnctl status`` — print the tunnel state, enriched when connected.
 
     Reads ``state()``. When ``ipsec_state == 2`` (CONNECTED) it derives the
     profile name from the state and merges ``connection_info`` + ``connection_ip``
     so the human line / JSON object carry IP, duration and traffic counters. When
     not connected it reports just the state label.
     """
-    state = forti.state()
+    state = fvpnctl.state()
 
     if state.ipsec_state != _CONNECTED:
         if args.json:
@@ -303,8 +303,8 @@ def _cmd_status(forti: FortiVPN, args: argparse.Namespace) -> int:
         return 0
 
     name = state.name
-    info = forti.connection_info(name, _IPSEC)
-    ip = forti.connection_ip(name, _IPSEC)
+    info = fvpnctl.connection_info(name, _IPSEC)
+    ip = fvpnctl.connection_ip(name, _IPSEC)
 
     if args.json:
         # Merge the raw state with the info/ip dicts into one object.
@@ -323,8 +323,8 @@ def _cmd_status(forti: FortiVPN, args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_connect(forti: FortiVPN, args: argparse.Namespace) -> int:
-    """``forti connect <profile>`` — connect, optionally waiting for CONNECTED.
+def _cmd_connect(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
+    """``fvpnctl connect <profile>`` — connect, optionally waiting for CONNECTED.
 
     Routes to ``connect(profile, username=..., wait=not --no-wait,
     timeout=...)``. With ``--no-wait`` it prints a ``connecting`` progress line
@@ -334,7 +334,7 @@ def _cmd_connect(forti: FortiVPN, args: argparse.Namespace) -> int:
     """
     wait = not args.no_wait
     report(f"Connecting profile {args.profile}…")
-    state = forti.connect(
+    state = fvpnctl.connect(
         args.profile,
         username=args.user,
         wait=wait,
@@ -346,13 +346,13 @@ def _cmd_connect(forti: FortiVPN, args: argparse.Namespace) -> int:
         return 0
 
     if state.ipsec_state == _CONNECTED:
-        ip = forti.connection_ip(args.profile, _IPSEC)
+        ip = fvpnctl.connection_ip(args.profile, _IPSEC)
         vpn_ip = ip.get("vpn_ip", "")
         # FortiClient pops its window on connect even under --hide-gui; hide it
         # again (over CDP) unless the user asked to keep it. Only meaningful in the
         # waited path: with --no-wait the popup happens after we return.
         if not args.show_window:
-            _hide_window_best_effort(forti)
+            _hide_window_best_effort(fvpnctl)
         report(f"Connected: {vpn_ip}")
         print(f"CONNECTED {args.profile} {vpn_ip}")
     else:
@@ -363,31 +363,31 @@ def _cmd_connect(forti: FortiVPN, args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_disconnect(forti: FortiVPN, args: argparse.Namespace) -> int:
-    """``forti disconnect <profile>`` — tear down the tunnel and confirm."""
-    forti.disconnect(args.profile)
+def _cmd_disconnect(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
+    """``fvpnctl disconnect <profile>`` — tear down the tunnel and confirm."""
+    fvpnctl.disconnect(args.profile)
     print(f"DISCONNECTED {args.profile}")
     return 0
 
 
-def _cmd_ip(forti: FortiVPN, args: argparse.Namespace) -> int:
-    """``forti ip`` — print the VPN IP, or exit 1 with ``not connected`` on stderr.
+def _cmd_ip(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
+    """``fvpnctl ip`` — print the VPN IP, or exit 1 with ``not connected`` on stderr.
 
     Reads ``state()``; only when ``ipsec_state == 2`` does it print the assigned
     IP. Otherwise it writes ``not connected`` to stderr and returns ``1`` so the
     value can be used safely in shell pipelines (a non-IP line never reaches
     stdout).
     """
-    state = forti.state()
+    state = fvpnctl.state()
     if state.ipsec_state != _CONNECTED:
         print("not connected", file=sys.stderr)
         return 1
-    ip = forti.connection_ip(state.name, _IPSEC)
+    ip = fvpnctl.connection_ip(state.name, _IPSEC)
     print(ip.get("vpn_ip", ""))
     return 0
 
 
-def _hide_window_best_effort(forti: FortiVPN) -> None:
+def _hide_window_best_effort(fvpnctl: FortiVPN) -> None:
     """Hide FortiClient's main window — best effort, never fails the caller.
 
     Hiding is cosmetic (the tunnel is already up by the time this runs), so a
@@ -396,26 +396,26 @@ def _hide_window_best_effort(forti: FortiVPN) -> None:
     """
     report("Hiding FortiClient window…")
     try:
-        forti.hide_window()
+        fvpnctl.hide_window()
     except CDPEvaluateError as e:
         # Cosmetic step; don't let it fail an otherwise-successful command.
         report(f"(could not hide FortiClient window: {e})")
 
 
-def _cmd_hide_window(forti: FortiVPN, args: argparse.Namespace) -> int:
-    """``forti hide-window`` — hide FortiClient's main window to the tray.
+def _cmd_hide_window(fvpnctl: FortiVPN, args: argparse.Namespace) -> int:
+    """``fvpnctl hide-window`` — hide FortiClient's main window to the tray.
 
     For when the window is up (e.g. a connect run with ``--show-window``, or
     FortiClient popped it itself). Unlike the best-effort hide after connect,
     errors propagate here since hiding is this command's whole purpose.
     """
-    forti.hide_window()
+    fvpnctl.hide_window()
     report("FortiClient window hidden.")
     return 0
 
 
 def _cmd_startserver(args: argparse.Namespace) -> int:
-    """``forti startserver`` — launch FortiClient headless with CDP enabled.
+    """``fvpnctl startserver`` — launch FortiClient headless with CDP enabled.
 
     The one non-attach-only command. It does **not** open a ``CDPSession`` (there
     may be nothing to attach to yet); :func:`main` dispatches it before the
@@ -428,7 +428,7 @@ def _cmd_startserver(args: argparse.Namespace) -> int:
     """
     wait = 0.0 if args.no_wait else 10.0
     launcher.start_server(args.host, args.port, wait=wait, on_info=report)
-    print(f"FortiClient CDP listening on {args.host}:{args.port}")
+    print(f"FortiClient debug port ready on {args.host}:{args.port}")
     return 0
 
 
@@ -473,8 +473,8 @@ def main(argv: list[str] | None = None) -> int:
         report(f"Attaching to FortiClient CDP at {args.host}:{args.port}…")
         with CDPSession(args.port, args.host) as session:
             session.connect()
-            forti = FortiVPN(session)
-            return args.func(forti, args)
+            fvpnctl = FortiVPN(session)
+            return args.func(fvpnctl, args)
     except NotRunningError as e:
         # FortiClient's CDP endpoint is unreachable. The exception message is
         # factual only (cdp.py keeps the transport decoupled); the CLI owns the
@@ -497,8 +497,8 @@ def main(argv: list[str] | None = None) -> int:
 def _print_not_running_guidance(port: int) -> None:
     """Print actionable "how to reach FortiClient" advice to stderr.
 
-    Complements the factual :class:`~fortivpn.errors.NotRunningError` message
-    (which only names the unreachable URL). Always suggests ``forti startserver``.
+    Complements the factual :class:`~fvpnctl.errors.NotRunningError` message
+    (which only names the unreachable URL). Always suggests ``fvpnctl startserver``.
     Then, if :func:`launcher.find_forticlient` locates the installed executable,
     it shows the exact manual launch command for users who prefer to run it
     themselves; if FortiClient is not installed at all, it shows
@@ -506,7 +506,7 @@ def _print_not_running_guidance(port: int) -> None:
     module global so tests can monkeypatch ``cli.launcher``. This guidance is
     independent of verbosity — a hard error always explains how to recover.
     """
-    print("To start it, run:  forti startserver", file=sys.stderr)
+    print("To start it, run:  fvpnctl startserver", file=sys.stderr)
     exe = launcher.find_forticlient()
     if exe is not None:
         print(

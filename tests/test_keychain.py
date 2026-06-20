@@ -19,8 +19,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from fortivpn.errors import KeychainError
-from fortivpn.keychain import get_password
+from fvpnctl.errors import KeychainError
+from fvpnctl.keychain import get_password
 
 
 def _fake_run(returncode, stdout="", stderr=""):

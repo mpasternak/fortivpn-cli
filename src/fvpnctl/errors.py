@@ -1,4 +1,4 @@
-"""Exception hierarchy for fortivpn.
+"""Exception hierarchy for fvpnctl.
 
 Why this module exists
 ----------------------
@@ -27,7 +27,7 @@ section 5; do not change them without updating the CLI contract.
 
 
 class FortiError(Exception):
-    """Base class for every error raised by fortivpn.
+    """Base class for every error raised by fvpnctl.
 
     Why: gives callers (and the CLI) a single type to catch for *expected*,
     user-facing failures, keeping them distinct from genuine bugs (which should

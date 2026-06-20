@@ -1,17 +1,16 @@
-# fortivpn — control FortiClient IPsec VPN on macOS via the Chrome DevTools Protocol
+# fvpnctl — control your FortiClient VPN from the macOS command line
 
 [![CI](https://github.com/mpasternak/fortivpn-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/mpasternak/fortivpn-cli/actions/workflows/ci.yml)
 
-A macOS command-line tool (`forti`) and reusable Python library that **connects,
-disconnects, and reports the status of FortiClient IPsec VPN profiles — with no GUI
-automation at all.** Instead of clicking buttons through Accessibility APIs, it attaches
-to the running FortiClient over the Chrome DevTools Protocol (CDP) and drives the Electron
-renderer's own internal `window.guimessenger` API directly.
+A small command-line tool (`fvpnctl`) and Python library for **connecting, disconnecting,
+and checking the status of FortiClient VPN profiles from the terminal** — handy for scripts,
+automation, and headless or over-SSH use, with no GUI needed. It works with a FortiClient you
+already have running, talking to it over a local debugging port.
 
 - Zero runtime dependencies (Python standard library only).
 - Python ≥ 3.11, macOS only.
 - Attach-only by default: commands attach to a running FortiClient; the one explicit
-  exception is `forti startserver`, an opt-in launcher you invoke yourself.
+  exception is `fvpnctl startserver`, an opt-in launcher you invoke yourself.
 
 > **Disclaimer.** This is an independent, unofficial project. It is **not affiliated with,
 > endorsed by, or sponsored by Fortinet, Inc.** "FortiClient" and "Fortinet" are registered
@@ -19,98 +18,76 @@ renderer's own internal `window.guimessenger` API directly.
 > identify the software this tool interoperates with. This software is provided **"as is",
 > without warranty of any kind**: you use it **entirely at your own risk**, and the author
 > accepts **no liability** for any damage, data loss, dropped VPN connections, or other
-> losses arising from its use. It depends on FortiClient's internal, undocumented API, which
-> may change or break at any time. Ensure your use complies with your organization's policies
+> losses arising from its use. It relies on a local debugging interface that may change
+> between FortiClient versions. Ensure your use complies with your organization's policies
 > and with Fortinet's licensing terms. See [LICENSE](LICENSE) for the full warranty/liability
 > disclaimer.
 
 ---
 
-## What it is, and why this approach
+## What it is
 
-FortiClient on macOS is an Electron app. Its UI talks to the underlying VPN daemon through
-an in-page JavaScript bridge, `window.guimessenger` — the same object the buttons in the
-tray GUI call. This tool reaches that object directly over CDP and calls its methods
-(`GetVPNConnectionList`, `SetGuiHandle`, `ConnectTunnel`, `getConnectionState`, …) instead
-of synthesising clicks.
+[FortiClient](https://www.fortinet.com/products/endpoint-security/forticlient) is excellent,
+mature, full-featured security and VPN software — `fvpnctl` doesn't replace any of it. It
+simply adds a thin, scriptable command line on top, so you can bring VPN profiles up and down
+and check their status from the terminal, from a script, or over SSH, without opening the GUI.
 
-### Why not GUI automation?
+It does this by talking to a FortiClient that you launch yourself, over a local debugging
+port — so there is no UI scraping and the behaviour is deterministic: a command issues a
+request and reads back a clear connection state. Tested against FortiClient 7.4.x on macOS.
 
-The obvious alternative — driving the tray menu with AppleScript / the Accessibility (AX)
-API — is what the sibling project (`fortivpn-cli-macos`) does. It works, but it is:
+### Running FortiClient with the debugging port
 
-- **Fragile.** It depends on window geometry, menu labels, localisation, and the
-  Accessibility permission. A FortiClient UI redesign breaks it.
-- **Non-deterministic.** Clicks race the UI; you wait on pixels and spinners.
-- **Not headless-friendly.** It needs the GUI on screen to click.
+`fvpnctl` attaches to a running FortiClient over a local debugging port, which FortiClient
+exposes when it is launched with `--remote-debugging-port=<port>` (this is off in the normal
+tray-GUI mode). So **you launch FortiClient yourself with that flag**, and `fvpnctl` attaches
+to it.
 
-Driving `window.guimessenger` over CDP avoids all of that:
+The tool is **attach-only by default**: it never *automatically* launches, quits, or restarts
+FortiClient. That is a deliberate safety choice — FortiClient owns the tunnel and the system
+network configuration, and a CLI silently bouncing it would be surprising and could drop a
+live connection. The single explicit exception is `fvpnctl startserver`, which you run on
+purpose to start FortiClient headless (handy for ad-hoc use). Otherwise lifecycle is yours (a
+LaunchAgent does it once, at login). If nothing is listening on the debug port, every *other*
+command fails fast with exit code `3` and tells you exactly how to start it — including the
+`fvpnctl startserver` shortcut.
 
-- **No Accessibility permission, no clicking.** We call the same functions the UI calls.
-- **Deterministic.** We issue an API call and poll an integer state enum
-  (`0=DISCONNECTED 1=CONNECTING 2=CONNECTED 3=XAUTH 4=RECONNECTING`) — no UI timing.
-- **Scriptable and headless.** It runs against a FortiClient launched with `--hide-gui`,
-  so it works over SSH and in unattended scripts.
-
-This control path was validated empirically against a live tunnel (FortiClient 7.4.3.4323,
-macOS). See [`docs/how-it-works.md`](./docs/how-it-works.md) for the "why it works"
-walkthrough and
-[`docs/superpowers/specs/2026-06-20-fortivpn-cli-via-cdp-design.md`](./docs/superpowers/specs/2026-06-20-fortivpn-cli-via-cdp-design.md)
-for the full design.
-
-### Why FortiClient must run headless with `--remote-debugging-port`
-
-CDP is only reachable when the Electron process is started with
-`--remote-debugging-port=<port>`. FortiClient does not enable it in normal tray-GUI mode,
-so **you must launch FortiClient yourself with that flag** for this tool to attach.
-
-The tool is **attach-only by default**: it never *automatically* launches, quits, or
-restarts FortiClient. That is a safety decision — the VPN client owns the tunnel and the
-system network configuration, and a CLI silently bouncing it would be surprising and could
-drop a live connection. The single explicit exception is `forti startserver`, which you run
-deliberately to launch FortiClient headless + debug (handy for ad-hoc use). Otherwise
-lifecycle is your responsibility (a LaunchAgent does it once, at login). If nothing is
-listening on the debug port, every *other* command fails fast with exit code `3`
-(`NotRunningError`) and tells you exactly how to start it — including the `forti startserver`
-shortcut.
-
-The recommended launch is either `forti startserver` or, equivalently, by hand:
+The recommended launch is either `fvpnctl startserver` or, equivalently, by hand:
 
 ```bash
 /Applications/FortiClient.app/Contents/MacOS/FortiClient --hide-gui --remote-debugging-port=9222
 ```
 
-`--hide-gui` runs it without the tray window (you don't need the UI; the CLI is the UI),
-and `--remote-debugging-port=9222` exposes CDP on `127.0.0.1:9222`.
+`--hide-gui` runs it without the tray window (you drive everything through `fvpnctl`), and
+`--remote-debugging-port=9222` exposes the debugging port on `127.0.0.1:9222`.
 
 ---
 
 ## Install
 
 The project is managed with [`uv`](https://docs.astral.sh/uv/) and has **no runtime
-dependencies**. The PyPI package is `fortivpn`; the command it installs is `forti`.
+dependencies**. The PyPI package is `fvpnctl`; the command it installs is `fvpnctl`.
 
 **From PyPI:**
 
 ```bash
-uv tool install fortivpn   # puts the `forti` command on your PATH
-forti list
+uv tool install fvpnctl   # puts the `fvpnctl` command on your PATH
+fvpnctl list
 ```
 
-Or run it once, without installing, with `uvx` (note the `--from`, since the package name
-`fortivpn` differs from the command `forti`):
+Or run it once, without installing, with `uvx`:
 
 ```bash
-uvx --from fortivpn forti list
+uvx fvpnctl list
 ```
 
-(`pipx install fortivpn` / `pip install fortivpn` work too.)
+(`pipx install fvpnctl` / `pip install fvpnctl` work too.)
 
 **From source (this checkout):**
 
 ```bash
-uv tool install .       # install the `forti` command from the local tree
-uv run forti list       # or run it in place, without installing
+uv tool install .       # install the `fvpnctl` command from the local tree
+uv run fvpnctl list       # or run it in place, without installing
 ```
 
 Requirements: macOS, Python ≥ 3.11.
@@ -126,7 +103,7 @@ password into the Keychain.
 
 This tool only attaches; something has to start FortiClient in debug mode. The clean way
 is a per-user LaunchAgent that launches it once at login. A ready-to-use plist ships in
-[`contrib/com.fortivpn.headless.plist`](./contrib/com.fortivpn.headless.plist):
+[`contrib/com.fvpnctl.headless.plist`](./contrib/com.fvpnctl.headless.plist):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -134,7 +111,7 @@ is a per-user LaunchAgent that launches it once at login. A ready-to-use plist s
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.fortivpn.headless</string>
+    <string>com.fvpnctl.headless</string>
     <key>ProgramArguments</key>
     <array>
         <string>/Applications/FortiClient.app/Contents/MacOS/FortiClient</string>
@@ -152,15 +129,15 @@ is a per-user LaunchAgent that launches it once at login. A ready-to-use plist s
 Install and load it:
 
 ```bash
-cp contrib/com.fortivpn.headless.plist ~/Library/LaunchAgents/
-launchctl load -w ~/Library/LaunchAgents/com.fortivpn.headless.plist
+cp contrib/com.fvpnctl.headless.plist ~/Library/LaunchAgents/
+launchctl load -w ~/Library/LaunchAgents/com.fvpnctl.headless.plist
 ```
 
 `RunAtLoad` starts it at login; `KeepAlive` relaunches it if it exits, so the debug port is
 always available. To stop using it:
 
 ```bash
-launchctl unload -w ~/Library/LaunchAgents/com.fortivpn.headless.plist
+launchctl unload -w ~/Library/LaunchAgents/com.fvpnctl.headless.plist
 ```
 
 **Important — this replaces the normal tray-GUI mode.** FortiClient is a single-instance
@@ -169,9 +146,9 @@ ordinary tray-GUI FortiClient at the same time. Switching between the two modes 
 quitting the headless instance and reopening the GUI app, or vice versa) **drops any active
 tunnel** — restarting the FortiClient process tears the connection down. So pick one mode;
 if you adopt this tool, let the LaunchAgent own FortiClient and drive everything through
-`forti`.
+`fvpnctl`.
 
-> If you customise the port, keep it consistent: pass `--port`/`FORTI_CDP_PORT` to `forti`
+> If you customise the port, keep it consistent: pass `--port`/`FORTI_CDP_PORT` to `fvpnctl`
 > (see Usage) so it matches the `--remote-debugging-port` in the plist.
 
 ### 2. Add your VPN credentials to the Keychain
@@ -195,7 +172,7 @@ security add-generic-password -s forti-vpn-office -a alice -w
 is always `forti-vpn-` followed by the exact profile name, and the *account* name (`-a`) is
 the VPN username. This convention is shared verbatim with the sibling AppleScript tool, so
 **any Keychain item you already created for that tool works here unchanged** — it is the
-same item, looked up the same way. At connect time `forti` runs
+same item, looked up the same way. At connect time `fvpnctl` runs
 `security find-generic-password -s forti-vpn-<profile> -a <username> -w` to read it back.
 
 If the item is missing or access is denied, `connect` fails with exit code `4`
@@ -206,64 +183,64 @@ If the item is missing or access is denied, `connect` fails with exit code `4`
 ## Usage
 
 ```
-forti [--port N] [--host H] <command> ...
+fvpnctl [--port N] [--host H] <command> ...
 ```
 
 Global options:
 
-- `--port N` — CDP debug port (default `9222`). Overridable by the `FORTI_CDP_PORT`
+- `--port N` — FortiClient debug port (default `9222`). Overridable by the `FORTI_CDP_PORT`
   environment variable. Must match the `--remote-debugging-port` FortiClient was launched
   with.
-- `--host H` — CDP host (default `127.0.0.1`).
+- `--host H` — debug host (default `127.0.0.1`).
 - `--verbose` / `--quiet` — progress messages. Verbose is **on by default** and writes
   progress to **stderr**; `--quiet` silences it. Either way `stdout` carries only the
   machine-readable result, so `--json` output and shell pipelines are byte-identical.
 
 `list` and `status` additionally accept `--json` for machine-readable output.
 
-### `forti list`
+### `fvpnctl list`
 
 List configured VPN profiles.
 
 ```console
-$ forti list
+$ fvpnctl list
 NAME    TYPE   SERVER
 office    ipsec  vpn.example.com
 acme    ipsec  gw.acme.example
 ```
 
 ```console
-$ forti list --json
+$ fvpnctl list --json
 [{"connection_name": "office", "type": "ipsec", ...}, ...]
 ```
 
-### `forti status`
+### `fvpnctl status`
 
 Show the current tunnel state. When connected, it also reports the tunnel IP, duration, and
 traffic.
 
 ```console
-$ forti status
+$ fvpnctl status
 CONNECTED office 172.16.200.2 (00:01:45, ↓1.6KB ↑0)
 ```
 
 ```console
-$ forti status
+$ fvpnctl status
 DISCONNECTED
 ```
 
 ```console
-$ forti status --json
+$ fvpnctl status --json
 {"ipsec_state": 2, "ssl_state": 0, "connection_name": "office", ...}
 ```
 
-### `forti connect <profile> [-u USER] [--no-wait] [--timeout S]`
+### `fvpnctl connect <profile> [-u USER] [--no-wait] [--timeout S]`
 
 Connect an IPsec profile. The username defaults to the one stored in the profile; the
 password is read from the Keychain. By default it waits until the tunnel reaches CONNECTED.
 
 ```console
-$ forti connect office
+$ fvpnctl connect office
 connecting office...
 CONNECTED office 172.16.200.2
 ```
@@ -278,53 +255,51 @@ Options:
   failure (exit `6`).
 - `--show-window` — keep FortiClient's window visible after connecting (see the note below).
 
-By default, after a successful connect `forti` **hides FortiClient's window**. FortiClient
-pops its main window on connect even under `--hide-gui`, so `connect` calls
-`window.forticlient.closeMainWindow()` over CDP to send it back to the tray — best effort, so
-a failure to hide never fails an otherwise-successful connect. Pass `--show-window` to keep
-the window up. (This only applies in the waited path; with `--no-wait` the popup happens
-after the command returns.)
+By default, after a successful connect `fvpnctl` **hides FortiClient's window**. FortiClient
+pops its main window on connect even under `--hide-gui`, so `connect` sends it back to the
+tray for you (without quitting the app) — best effort, so a failure to hide never fails an
+otherwise-successful connect. Pass `--show-window` to keep the window up. (This only applies
+in the waited path; with `--no-wait` the popup happens after the command returns.)
 
-### `forti disconnect <profile>`
+### `fvpnctl disconnect <profile>`
 
 Disconnect an IPsec profile.
 
 ```console
-$ forti disconnect office
+$ fvpnctl disconnect office
 DISCONNECTED office
 ```
 
-### `forti ip`
+### `fvpnctl ip`
 
 Print just the assigned tunnel IP — handy in scripts. Exits `1` with a message on stderr if
 not connected.
 
 ```console
-$ forti ip
+$ fvpnctl ip
 172.16.200.2
 ```
 
-### `forti hide-window`
+### `fvpnctl hide-window`
 
-Hide FortiClient's main window to the tray, over CDP (via
-`window.forticlient.closeMainWindow()`, which hides the window without quitting the app).
-`connect` already does this by default; run it manually when the window is up for another
-reason (e.g. a `connect --show-window`, or FortiClient popped it itself).
+Hide FortiClient's main window to the tray (without quitting the app). `connect` already does
+this by default; run it manually when the window is up for another reason (e.g. a
+`connect --show-window`, or FortiClient popped it itself).
 
 ```console
-$ forti hide-window
+$ fvpnctl hide-window
 ```
 
-### `forti startserver`
+### `fvpnctl startserver`
 
-Launch FortiClient headless with CDP enabled, so the attach-only commands have something to
+Launch FortiClient headless with the debug port enabled, so the attach-only commands have something to
 attach to. **This is the one command that starts FortiClient** — every other command only
 attaches. It is idempotent (does nothing if the port already answers), and if FortiClient is
 not installed it prints a download hint and exits `8`.
 
 ```console
-$ forti startserver
-FortiClient CDP listening on 127.0.0.1:9222
+$ fvpnctl startserver
+FortiClient debug port ready on 127.0.0.1:9222
 ```
 
 Use it for ad-hoc sessions; for a permanent setup prefer the LaunchAgent above. FortiClient
@@ -339,7 +314,7 @@ debug port.
 ## Exit codes
 
 The exit code is selected by the *type* of failure, so scripts can branch on it. These
-match [`src/fortivpn/errors.py`](./src/fortivpn/errors.py).
+match [`src/fvpnctl/errors.py`](./src/fvpnctl/errors.py).
 
 | Code | Meaning |
 |------|---------|
@@ -348,7 +323,7 @@ match [`src/fortivpn/errors.py`](./src/fortivpn/errors.py).
 | `3` | FortiClient not running / not reachable on the debug port (`NotRunningError`) |
 | `4` | Keychain lookup failed — item missing or access denied (`KeychainError`) |
 | `5` | Unsupported in v1 — SSL profile or 2FA/XAUTH required (`UnsupportedError`) |
-| `6` | Connect failed (negotiated then dropped) or a CDP evaluation threw (`ConnectFailed` / `CDPEvaluateError`) |
+| `6` | Connect failed (negotiated then dropped) or an internal call to FortiClient failed (`ConnectFailed` / `CDPEvaluateError`) |
 | `7` | Timed out waiting for CONNECTED, including never leaving DISCONNECTED (`ConnectTimeout`) |
 | `8` | FortiClient is not installed — `startserver` could not find the app (`FortiClientNotFoundError`) |
 | `1` | Any other `FortiError` |
@@ -378,16 +353,14 @@ scope, with a clear error rather than a guess:
   was untested in the spike.
 - **No 2FA.** If the daemon enters the XAUTH state (a token/OTP is required), `connect`
   raises `UnsupportedError("2FA not supported in v1")` (exit `5`) instead of prompting.
-- **No profile management.** No create / delete / rename / import, even though the
-  underlying API exposes it. Profiles are managed in FortiClient itself.
+- **No profile management.** No create / delete / rename / import — profiles are managed in
+  FortiClient itself.
 - **No automatic lifecycle management.** Commands never auto-start, quit, or restart
-  FortiClient. The one explicit launcher is `forti startserver` (or install the LaunchAgent
+  FortiClient. The one explicit launcher is `fvpnctl startserver` (or install the LaunchAgent
   above); the tool still never quits or restarts a *running* FortiClient.
 - **No default profile / config file.** The profile name is always passed explicitly.
 
-For the validated control path and the rationale, see
-[`docs/how-it-works.md`](./docs/how-it-works.md) and the
-[design spec](./docs/superpowers/specs/2026-06-20-fortivpn-cli-via-cdp-design.md).
+For more on how it works, see [`docs/how-it-works.md`](./docs/how-it-works.md).
 
 ---
 
@@ -407,7 +380,7 @@ uv run pre-commit install
 uv run pre-commit run --all-files
 ```
 
-The unit suite runs entirely without FortiClient (the CDP session is mocked). An
+The unit suite runs entirely without FortiClient (the connection is mocked). An
 **attended** integration test lives in [`tests/manual/test_live.py`](./tests/manual/test_live.py);
 it is skipped by default and only runs when you set `FORTI_LIVE=1` against a real
 headless + debug FortiClient — note that it **breaks the live tunnel** (connect →

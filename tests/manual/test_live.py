@@ -29,8 +29,8 @@ import os
 
 import pytest
 
-from fortivpn.cdp import CDPSession
-from fortivpn.controller import FortiVPN
+from fvpnctl.cdp import CDPSession
+from fvpnctl.controller import FortiVPN
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("FORTI_LIVE") != "1",

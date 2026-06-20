@@ -12,17 +12,17 @@
       CLI always has something to attach to.
 
       Install:
-        cp contrib/com.fortivpn.headless.plist ~/Library/LaunchAgents/
-        launchctl load -w ~/Library/LaunchAgents/com.fortivpn.headless.plist
+        cp contrib/com.fvpnctl.headless.plist ~/Library/LaunchAgents/
+        launchctl load -w ~/Library/LaunchAgents/com.fvpnctl.headless.plist
       Uninstall:
-        launchctl unload -w ~/Library/LaunchAgents/com.fortivpn.headless.plist
+        launchctl unload -w ~/Library/LaunchAgents/com.fvpnctl.headless.plist
 
       NOTE: FortiClient is single-instance, so this REPLACES the tray-GUI mode.
       Switching modes (or restarting the process) drops any active tunnel.
       Keep the port here in sync with --port / FORTI_CDP_PORT passed to `forti`.
     -->
     <key>Label</key>
-    <string>com.fortivpn.headless</string>
+    <string>com.fvpnctl.headless</string>
 
     <key>ProgramArguments</key>
     <array>

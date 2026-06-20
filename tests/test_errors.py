@@ -1,4 +1,4 @@
-"""Tests for the fortivpn exception hierarchy.
+"""Tests for the fvpnctl exception hierarchy.
 
 These pin down the two things the CLI depends on: that every error is a
 ``FortiError`` (so a single ``except`` catches them all) and that each type maps
@@ -8,7 +8,7 @@ instance still behaves like a normal exception carrying its message.
 
 import pytest
 
-from fortivpn.errors import (
+from fvpnctl.errors import (
     CDPEvaluateError,
     ConnectFailed,
     ConnectTimeout,

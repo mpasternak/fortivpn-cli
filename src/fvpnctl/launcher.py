@@ -4,7 +4,7 @@ What this is
 ------------
 The rest of this package is strictly *attach-only*: it connects to a FortiClient
 that is already running with ``--remote-debugging-port`` and never starts one.
-This module is the single, opt-in exception. ``forti startserver`` calls
+This module is the single, opt-in exception. ``fvpnctl startserver`` calls
 :func:`start_server`, which locates the installed FortiClient executable and
 launches it headless with the Chrome DevTools Protocol enabled, so the
 attach-only commands have something to attach to.
@@ -21,13 +21,13 @@ FortiClient is effectively single-instance on macOS: if a tray/GUI instance is
 already running *without* ``--remote-debugging-port``, a second invocation with
 the flag does not open a new debugging port — it just foregrounds the existing
 instance. So :func:`start_server` can launch the binary and still time out
-waiting for the port. The :class:`~fortivpn.errors.FortiError` it raises in that
+waiting for the port. The :class:`~fvpnctl.errors.FortiError` it raises in that
 case says so explicitly, because "quit the running tray instance, then retry" is
 the actual fix. See docs/how-it-works.md section 1.
 
 Why the launch is detached (``start_new_session=True`` + discarded output)
 --------------------------------------------------------------------------
-We want FortiClient to keep running as a CDP server *after* ``forti
+We want FortiClient to keep running as a CDP server *after* ``fvpnctl
 startserver`` exits — it is a long-lived background daemon, not a child whose
 lifetime is tied to ours. ``start_new_session=True`` puts it in its own process
 group/session so it is not killed when our process group gets a SIGINT (Ctrl-C
@@ -52,7 +52,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 
-from fortivpn import errors
+from fvpnctl import errors
 
 # Where FortiClient installs its app bundle on macOS, in the order we try them.
 # The product ships under a few names across versions/editions; the first bundle
@@ -80,7 +80,7 @@ def find_forticlient() -> pathlib.Path | None:
     which is the macOS convention and the common case. The resolved executable
     is returned only if it actually exists; otherwise the search continues. If no
     bundle yields an existing executable, returns ``None`` (the caller turns that
-    into a :class:`~fortivpn.errors.FortiClientNotFoundError` with a download
+    into a :class:`~fvpnctl.errors.FortiClientNotFoundError` with a download
     hint).
     """
     for bundle in _APP_BUNDLES:
@@ -117,7 +117,7 @@ def _bundle_executable_name(app: pathlib.Path) -> str:
 def download_hint() -> str:
     """Return a short multi-line "FortiClient isn't installed; get it here" note.
 
-    Used both in :class:`~fortivpn.errors.FortiClientNotFoundError` messages and
+    Used both in :class:`~fvpnctl.errors.FortiClientNotFoundError` messages and
     by the CLI when it cannot find the executable, so the user is always pointed
     at the free VPN client rather than left guessing.
     """
@@ -162,14 +162,14 @@ def start_server(
     poll: float = 0.5,
     on_info: Callable[[str], None] | None = None,
 ) -> None:
-    """Ensure a FortiClient CDP server is listening on ``host:port``; launch if not.
+    """Ensure a FortiClient's debug port is open on ``host:port``; launch if not.
 
     Steps:
 
     1. If :func:`cdp_reachable` already answers, do nothing (idempotent) — report
        via ``on_info`` and return. Calling ``startserver`` twice is harmless.
     2. Otherwise locate the executable with :func:`find_forticlient`; if there is
-       none, raise :class:`~fortivpn.errors.FortiClientNotFoundError` carrying
+       none, raise :class:`~fvpnctl.errors.FortiClientNotFoundError` carrying
        :func:`download_hint` (exit code 8 — "install it").
     3. Launch it detached and headless:
        ``<exe> --hide-gui --remote-debugging-port=<port>`` with
@@ -177,7 +177,7 @@ def start_server(
        module docstring for why detached).
     4. Poll :func:`cdp_reachable` every ``poll`` seconds for up to ``wait``
        seconds. If the port comes up, report success via ``on_info`` and return.
-       If ``wait`` elapses first, raise :class:`~fortivpn.errors.FortiError`
+       If ``wait`` elapses first, raise :class:`~fvpnctl.errors.FortiError`
        explaining that the binary was launched but the port never opened — most
        often because FortiClient is single-instance and a tray/GUI instance is
        already running without the debugging flag and must be quit first.
@@ -197,7 +197,7 @@ def start_server(
 
     # 1. Idempotent fast path: something already answers, nothing to do.
     if cdp_reachable(host, port):
-        _info(f"FortiClient CDP already reachable at {host}:{port}; nothing to launch.")
+        _info(f"FortiClient debug port already reachable at {host}:{port}; nothing to launch.")
         return
 
     # 2. Need to launch — but only if FortiClient is actually installed.
@@ -231,7 +231,7 @@ def start_server(
     deadline = time.monotonic() + wait
     while True:
         if cdp_reachable(host, port):
-            _info(f"FortiClient CDP is up on {host}:{port}.")
+            _info(f"FortiClient debug port is up on {host}:{port}.")
             return
         if time.monotonic() >= deadline:
             raise errors.FortiError(
