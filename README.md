@@ -87,19 +87,30 @@ and `--remote-debugging-port=9222` exposes CDP on `127.0.0.1:9222`.
 
 ## Install
 
-The project is managed with [`uv`](https://docs.astral.sh/uv/). It has **no runtime
-dependencies**, so installation is just the package itself.
+The project is managed with [`uv`](https://docs.astral.sh/uv/) and has **no runtime
+dependencies**. The PyPI package is `fortivpn`; the command it installs is `forti`.
 
-Install the `forti` command onto your PATH:
+**From PyPI:**
 
 ```bash
-uv tool install .
+uv tool install fortivpn   # puts the `forti` command on your PATH
+forti list
 ```
 
-Or run it without installing, straight from a checkout:
+Or run it once, without installing, with `uvx` (note the `--from`, since the package name
+`fortivpn` differs from the command `forti`):
 
 ```bash
-uv run forti list
+uvx --from fortivpn forti list
+```
+
+(`pipx install fortivpn` / `pip install fortivpn` work too.)
+
+**From source (this checkout):**
+
+```bash
+uv tool install .       # install the `forti` command from the local tree
+uv run forti list       # or run it in place, without installing
 ```
 
 Requirements: macOS, Python ≥ 3.11.
