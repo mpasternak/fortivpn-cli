@@ -657,3 +657,34 @@ def test_not_running_guidance_shows_download_hint_when_not_installed(monkeypatch
     assert "forti startserver" in err
     assert "DOWNLOAD-HINT-SENTINEL" in err
     assert "SPIKE" not in err
+
+
+def test_global_flags_after_subcommand():
+    # Users naturally write `forti status --quiet`; the global flags must parse in
+    # that position, not only before the subcommand. Regression for the
+    # "unrecognized arguments: --quiet" bug.
+    parser = cli._build_parser()
+    assert parser.parse_args(["status", "--quiet"]).verbose is False
+    assert parser.parse_args(["status", "--port", "1234"]).port == 1234
+
+
+def test_global_flags_before_subcommand():
+    parser = cli._build_parser()
+    assert parser.parse_args(["--quiet", "status"]).verbose is False
+    assert parser.parse_args(["--port", "1234", "status"]).port == 1234
+
+
+def test_top_level_port_not_clobbered_by_subparser_default():
+    # The argparse `parents` gotcha: a subparser re-declaring --port must not reset
+    # a value supplied before the subcommand. SUPPRESS defaults guard against it.
+    parser = cli._build_parser()
+    assert parser.parse_args(["--port", "1234", "status"]).port == 1234
+
+
+def test_unset_global_flags_absent_so_main_supplies_defaults():
+    # SUPPRESS keeps unset global flags out of the namespace, so main()'s getattr
+    # fallbacks (port from $FORTI_CDP_PORT/9222, verbose=True) take effect.
+    parser = cli._build_parser()
+    ns = parser.parse_args(["status"])
+    assert not hasattr(ns, "port")
+    assert not hasattr(ns, "verbose")

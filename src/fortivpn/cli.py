@@ -106,59 +106,66 @@ def _build_parser() -> argparse.ArgumentParser:
     applies the flag value over the default). Each subcommand stores its handler
     on ``func`` via ``set_defaults`` so :func:`main` can dispatch generically.
     """
-    parser = argparse.ArgumentParser(
-        prog="forti",
-        description=(
-            "Control an already-running FortiClient IPsec VPN over the Chrome "
-            "DevTools Protocol (attach-only; never launches FortiClient)."
-        ),
-    )
-    # Default port: env override, else 9222. An explicit --port beats the env var
-    # because argparse uses the flag value in preference to this default.
-    default_port = int(os.environ.get("FORTI_CDP_PORT", "9222"))
-    parser.add_argument(
+    # Global options accepted both BEFORE and AFTER the subcommand (users naturally
+    # write `forti status --quiet`). They live on a shared parent parser applied to
+    # the top-level parser AND every subparser. Defaults are argparse.SUPPRESS so a
+    # subparser re-declaring them does not clobber a value given at the top level
+    # (the classic argparse `parents` gotcha); main() applies the real defaults via
+    # getattr. The port default still honours $FORTI_CDP_PORT (resolved in main()).
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
         "--port",
         type=int,
-        default=default_port,
+        default=argparse.SUPPRESS,
         help="FortiClient CDP debugging port (default 9222, or $FORTI_CDP_PORT).",
     )
-    parser.add_argument(
+    common.add_argument(
         "--host",
-        default="127.0.0.1",
+        default=argparse.SUPPRESS,
         help="Host the CDP debugging endpoint binds to (default 127.0.0.1).",
     )
-    # Verbosity: --verbose is the default (ON); --quiet turns progress off and
-    # wins if both are passed. Progress goes to stderr only (see ``report``), so
-    # neither flag changes the stdout result. ``default=True`` on --verbose with
-    # ``store_false`` on --quiet writing the same ``verbose`` dest means "--quiet
-    # wins" falls out naturally regardless of order.
-    parser.add_argument(
+    # --verbose (default ON) / --quiet both write the same ``verbose`` dest, so
+    # "--quiet wins" falls out of order. SUPPRESS keeps an unset flag out of the
+    # namespace so main() can default it to True.
+    common.add_argument(
         "--verbose",
         dest="verbose",
         action="store_true",
-        default=True,
+        default=argparse.SUPPRESS,
         help="Print progress to stderr (default). stdout stays machine-readable.",
     )
-    parser.add_argument(
+    common.add_argument(
         "--quiet",
         dest="verbose",
         action="store_false",
+        default=argparse.SUPPRESS,
         help="Silence stderr progress (wins over --verbose). stdout is unchanged.",
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="forti",
+        parents=[common],
+        description=(
+            "Control an already-running FortiClient IPsec VPN over the Chrome "
+            "DevTools Protocol (attach-only; the one exception is `startserver`)."
+        ),
     )
 
     sub = parser.add_subparsers(dest="command")
 
-    p_list = sub.add_parser("list", help="List configured VPN profiles (name, type, server).")
+    p_list = sub.add_parser(
+        "list", parents=[common], help="List configured VPN profiles (name, type, server)."
+    )
     p_list.add_argument("--json", action="store_true", help="Emit a JSON array of profile dicts.")
     p_list.set_defaults(func=_cmd_list)
 
-    p_status = sub.add_parser("status", help="Show the current tunnel status.")
+    p_status = sub.add_parser("status", parents=[common], help="Show the current tunnel status.")
     p_status.add_argument(
         "--json", action="store_true", help="Emit the merged state as a JSON object."
     )
     p_status.set_defaults(func=_cmd_status)
 
-    p_connect = sub.add_parser("connect", help="Connect an IPsec profile.")
+    p_connect = sub.add_parser("connect", parents=[common], help="Connect an IPsec profile.")
     p_connect.add_argument("profile", help="The profile (connection_name) to connect.")
     p_connect.add_argument(
         "-u",
@@ -179,15 +186,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_connect.set_defaults(func=_cmd_connect)
 
-    p_disconnect = sub.add_parser("disconnect", help="Disconnect a profile.")
+    p_disconnect = sub.add_parser("disconnect", parents=[common], help="Disconnect a profile.")
     p_disconnect.add_argument("profile", help="The profile (connection_name) to disconnect.")
     p_disconnect.set_defaults(func=_cmd_disconnect)
 
-    p_ip = sub.add_parser("ip", help="Print the current tunnel's assigned VPN IP.")
+    p_ip = sub.add_parser(
+        "ip", parents=[common], help="Print the current tunnel's assigned VPN IP."
+    )
     p_ip.set_defaults(func=_cmd_ip)
 
     p_startserver = sub.add_parser(
         "startserver",
+        parents=[common],
         help="Launch FortiClient headless with the CDP debugging port enabled.",
         description=(
             "Start FortiClient headless with the Chrome DevTools Protocol enabled so "
@@ -390,10 +400,15 @@ def main(argv: list[str] | None = None) -> int:
         # No subcommand given: print usage and exit 2 (argparse usage-error code).
         parser.error("a subcommand is required")
 
-    # Apply verbosity for the whole run before any ``report`` call fires. --quiet
-    # wins automatically: both flags write the same ``verbose`` dest, and
-    # ``store_false`` ends up False whenever --quiet appears.
-    _VERBOSE = args.verbose
+    # Resolve the global options' real defaults. They use argparse.SUPPRESS (so a
+    # subparser copy doesn't clobber a top-level value), so an unset flag is absent
+    # from the namespace — getattr supplies the default. Write them back onto args
+    # so every downstream command (incl. startserver) sees concrete values.
+    # --quiet wins automatically: both flags target ``verbose``; whichever is parsed
+    # last lands, and an unset pair defaults to True (verbose on).
+    _VERBOSE = getattr(args, "verbose", True)
+    args.port = getattr(args, "port", int(os.environ.get("FORTI_CDP_PORT", "9222")))
+    args.host = getattr(args, "host", "127.0.0.1")
 
     try:
         if args.command == "startserver":
