@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    # The unit suite is platform-agnostic: it mocks `subprocess`/sockets and the
+    # one live test skips unless FORTI_LIVE=1, so Linux runners are sufficient and
+    # fast even though the tool itself is macOS-only at runtime.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Run tests
+        run: uv run pytest

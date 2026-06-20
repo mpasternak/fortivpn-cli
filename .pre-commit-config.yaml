@@ -1,7 +1,17 @@
-# Ruff lint + format via the official Astral mirror. No other hooks: the project
-# is stdlib-only and keeps tooling minimal. Run `pre-commit install` yourself to
-# enable the git hook (the scaffolding intentionally does not install it).
+# Pre-commit hooks. Run `pre-commit install` once to enable the git hook.
+# Ruff handles lint + format; the pre-commit-hooks set covers the usual hygiene.
 repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.13.0
     hooks:
