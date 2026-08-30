@@ -46,26 +46,59 @@ from fvpnctl.errors import (
 class FakeSession:
     """No-op stand-in for ``CDPSession`` — records construction args.
 
-    The CLI constructs ``CDPSession(port, host)``, uses it as a context manager,
-    and calls ``connect()`` on it. This fake records ``port``/``host`` on a
+    The CLI constructs ``CDPSession(port, host)``, calls ``connect()`` on it, and
+    then uses it as a context manager. This fake records ``port``/``host`` on a
     module-level list so tests can assert the global ``--port`` / ``--host`` /
     env handling, and otherwise does nothing — there is no real socket.
+
+    Two class-level knobs let a test make the *attach* fail (as an unreachable
+    FortiClient does), which is what the ``--start-fvpn`` autostart path keys off:
+
+    * ``connect_errors`` — a queue of exceptions raised by successive
+      ``connect()`` calls, one each, until it runs dry and connects succeed. Use
+      it to model "fails, then works after the relaunch".
+    * ``connect_error`` — a single exception raised by *every* ``connect()``.
+      Use it to model "never comes up".
+
+    ``evaluate_results`` plays the same role one layer up, for the post-launch
+    readiness probe (``typeof window.guimessenger``): a queue of values returned
+    by successive ``evaluate()`` calls — an entry that is an exception is raised
+    instead — falling back to ``"object"`` (ready) once drained. Use it to model
+    a renderer that is still loading right after FortiClient starts.
     """
 
     instances = []
+    connect_errors = []
+    connect_error = None
+    evaluate_results = []
 
     def __init__(self, port=9222, host="127.0.0.1"):
         self.port = port
         self.host = host
+        self.closed = False
         FakeSession.instances.append(self)
 
     def connect(self):
+        if FakeSession.connect_errors:
+            raise FakeSession.connect_errors.pop(0)
+        if FakeSession.connect_error is not None:
+            raise FakeSession.connect_error
         return None
+
+    def evaluate(self, expression, await_promise=True):
+        result = FakeSession.evaluate_results.pop(0) if FakeSession.evaluate_results else "object"
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    def close(self):
+        self.closed = True
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        self.close()
         return None
 
 
@@ -153,6 +186,9 @@ def patched(monkeypatch, tmp_path):
     reads/writes never touches the developer's real state dir.
     """
     FakeSession.instances = []
+    FakeSession.connect_errors = []
+    FakeSession.connect_error = None
+    FakeSession.evaluate_results = []
     FakeController.config = {}
     FakeController.last = None
     monkeypatch.setattr(cli, "CDPSession", FakeSession)
@@ -875,3 +911,188 @@ def test_unset_global_flags_absent_so_main_supplies_defaults():
     ns = parser.parse_args(["status"])
     assert not hasattr(ns, "port")
     assert not hasattr(ns, "verbose")
+
+
+# -- --start-fvpn autostart --------------------------------------------------
+
+
+def test_start_fvpn_launches_forticlient_and_retries(monkeypatch, capsys):
+    # The attach fails once (FortiClient not running); --start-fvpn launches it
+    # through the launcher and the command then runs normally.
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+    FakeSession.connect_errors = [NotRunningError("cannot reach CDP endpoint")]
+    FakeController.config["state"] = FakeState(
+        ipsec_state=0, name="", state_label="DISCONNECTED", raw={"ipsec_state": 0}
+    )
+
+    rc = cli.main(["--start-fvpn", "status"])
+
+    assert rc == 0
+    # The launcher was asked to start FortiClient on the same host/port.
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["host"] == "127.0.0.1"
+    assert fake.calls[0]["port"] == 9222
+    # And the command produced its normal output after the relaunch.
+    assert "DISCONNECTED" in capsys.readouterr().out
+
+
+def test_start_fvpn_uses_the_requested_host_and_port(monkeypatch):
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+    FakeSession.connect_errors = [NotRunningError("nope")]
+    FakeController.config["state"] = FakeState(ipsec_state=0, state_label="DISCONNECTED")
+
+    rc = cli.main(["--port", "9400", "--host", "localhost", "--start-fvpn", "status"])
+
+    assert rc == 0
+    assert fake.calls[0] == {
+        "host": "localhost",
+        "port": 9400,
+        "wait": cli._AUTOSTART_WAIT,
+        "on_info": cli.report,
+    }
+
+
+def test_start_fvpn_does_not_launch_when_already_reachable(monkeypatch):
+    # Idempotence at the CLI level: if the attach succeeds, --start-fvpn is inert
+    # and the launcher is never touched.
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+    FakeController.config["state"] = FakeState(ipsec_state=0, state_label="DISCONNECTED")
+
+    rc = cli.main(["--start-fvpn", "status"])
+
+    assert rc == 0
+    assert fake.calls == []
+
+
+def test_start_fvpn_retries_the_attach_until_the_page_target_appears(monkeypatch):
+    # start_server returns as soon as /json/version answers, but the debuggable
+    # page target can lag a moment — the attach is retried, not failed.
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    FakeSession.connect_errors = [
+        NotRunningError("port closed"),  # initial attach -> triggers the launch
+        NotRunningError("no page target yet"),  # first post-launch retry
+        NotRunningError("no page target yet"),  # second post-launch retry
+    ]
+    FakeController.config["state"] = FakeState(ipsec_state=0, state_label="DISCONNECTED")
+
+    rc = cli.main(["--start-fvpn", "status"])
+
+    assert rc == 0
+    assert len(fake.calls) == 1  # launched once, attached repeatedly
+    assert len(FakeSession.instances) == 4
+
+
+def test_start_fvpn_gives_up_and_exits_3_when_the_attach_never_succeeds(monkeypatch, capsys):
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+    monkeypatch.setattr(cli, "_POST_LAUNCH_WINDOW", 0.0)
+    FakeSession.connect_error = NotRunningError("still nothing there")
+    FakeController.config["state"] = FakeState(ipsec_state=0, state_label="DISCONNECTED")
+
+    rc = cli.main(["--start-fvpn", "status"])
+
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "still nothing there" in err
+    # It already tried the automatic launch, so don't tell the user to use the flag
+    # again (the verbose progress line naming it is a different thing).
+    assert "re-run the same command with --start-fvpn" not in err
+    assert "fvpnctl startserver" in err
+
+
+def test_start_fvpn_exits_8_when_forticlient_is_not_installed(monkeypatch, capsys):
+    fake = _FakeLauncher()
+    fake.start_error = FortiClientNotFoundError("not installed: get it from URL")
+    monkeypatch.setattr(cli, "launcher", fake)
+    FakeSession.connect_error = NotRunningError("cannot reach CDP endpoint")
+
+    rc = cli.main(["--start-fvpn", "status"])
+
+    assert rc == 8
+    captured = capsys.readouterr()
+    assert "not installed" in captured.err
+    assert captured.out.strip() == ""
+
+
+def test_not_running_guidance_suggests_the_start_fvpn_flag(monkeypatch, capsys):
+    # Without the flag the behaviour is unchanged except that the guidance now
+    # points at --start-fvpn as the one-shot fix.
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+    FakeSession.connect_error = NotRunningError("cannot reach CDP endpoint")
+
+    rc = cli.main(["status"])
+
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "--start-fvpn" in err
+    assert "fvpnctl startserver" in err
+    # Nothing was launched: the flag is opt-in.
+    assert fake.calls == []
+
+
+def test_start_fvpn_parses_before_and_after_the_subcommand():
+    parser = cli._build_parser()
+    assert parser.parse_args(["--start-fvpn", "status"]).start_fvpn is True
+    assert parser.parse_args(["status", "--start-fvpn"]).start_fvpn is True
+    # Unset stays out of the namespace so main()'s getattr default (False) applies.
+    assert not hasattr(parser.parse_args(["status"]), "start_fvpn")
+
+
+def test_start_fvpn_waits_for_the_renderer_before_running_the_command(monkeypatch, capsys):
+    # Real-world case: the debug port opens ~1s after launch and the page target
+    # attaches, but the renderer is still swapping in FortiClient's real page, so
+    # an evaluate blows up with "Execution context was destroyed". The session
+    # must be dropped and re-attached, not handed to the command.
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+    monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+    FakeSession.connect_errors = [NotRunningError("port closed")]
+    FakeSession.evaluate_results = [
+        CDPEvaluateError("Execution context was destroyed."),  # still loading
+        "undefined",  # blank page: attached, but no guimessenger yet
+        "object",  # ready -> this session is the one the command gets
+    ]
+    FakeController.config["state"] = FakeState(ipsec_state=0, state_label="DISCONNECTED")
+
+    rc = cli.main(["--start-fvpn", "status"])
+
+    assert rc == 0
+    # Four sessions: the failed initial attach + three post-launch attempts.
+    assert len(FakeSession.instances) == 4
+    # The two unusable sessions were closed rather than leaked.
+    assert [s.closed for s in FakeSession.instances[1:3]] == [True, True]
+    assert "DISCONNECTED" in capsys.readouterr().out
+
+
+def test_start_fvpn_exits_3_when_the_renderer_never_becomes_ready(monkeypatch, capsys):
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+    monkeypatch.setattr(cli, "_POST_LAUNCH_WINDOW", 0.0)
+    FakeSession.connect_errors = [NotRunningError("port closed")]
+    FakeSession.evaluate_results = [CDPEvaluateError("Execution context was destroyed.")]
+
+    rc = cli.main(["--start-fvpn", "status"])
+
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "renderer was still not ready" in err
+    assert "window.guimessenger" in err
+
+
+def test_renderer_ready_reports_false_instead_of_raising():
+    # The probe answers a yes/no question: an evaluate failure is "not ready yet",
+    # not an error to propagate.
+    FakeSession.evaluate_results = [CDPEvaluateError("Execution context was destroyed.")]
+    assert cli._renderer_ready(FakeSession()) is False
+
+    FakeSession.evaluate_results = ["undefined"]
+    assert cli._renderer_ready(FakeSession()) is False
+
+    FakeSession.evaluate_results = ["object"]
+    assert cli._renderer_ready(FakeSession()) is True

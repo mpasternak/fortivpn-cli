@@ -11,8 +11,9 @@ already have running, talking to it over a local debugging port.
 - **macOS only** (Python ≥ 3.11). There is **no Windows support** — it drives the
   macOS FortiClient.app, so `pip` / `uv` / `uvx` deliberately **refuse to install on
   Windows**, and running it from a source checkout there exits with a clear error.
-- Attach-only by default: commands attach to a running FortiClient; the one explicit
-  exception is `fvpnctl startserver`, an opt-in launcher you invoke yourself.
+- Attach-only by default: commands attach to a running FortiClient. Nothing is launched
+  unless you ask for it — with `fvpnctl startserver`, or by adding `--start-fvpn` to any
+  command to start FortiClient automatically when it isn't already up.
 
 > **Disclaimer.** This is an independent, unofficial project. It is **not affiliated with,
 > endorsed by, or sponsored by Fortinet, Inc.** "FortiClient" and "Fortinet" are registered
@@ -45,14 +46,27 @@ exposes when it is launched with `--remote-debugging-port=<port>` (this is off i
 tray-GUI mode). So **you launch FortiClient yourself with that flag**, and `fvpnctl` attaches
 to it.
 
-The tool is **attach-only by default**: it never *automatically* launches, quits, or restarts
-FortiClient. That is a deliberate safety choice — FortiClient owns the tunnel and the system
-network configuration, and a CLI silently bouncing it would be surprising and could drop a
-live connection. The single explicit exception is `fvpnctl startserver`, which you run on
-purpose to start FortiClient headless (handy for ad-hoc use). Otherwise lifecycle is yours (a
-LaunchAgent does it once, at login). If nothing is listening on the debug port, every *other*
-command fails fast with exit code `3` and tells you exactly how to start it — including the
-`fvpnctl startserver` shortcut.
+The tool is **attach-only by default**: it never launches, quits, or restarts FortiClient
+behind your back. That is a deliberate safety choice — FortiClient owns the tunnel and the
+system network configuration, and a CLI silently bouncing it would be surprising and could
+drop a live connection. So starting it is always something *you* ask for, in one of two ways:
+
+- **`fvpnctl startserver`** — start FortiClient headless, as its own step (handy for ad-hoc
+  use, or once at login via the LaunchAgent below).
+- **`--start-fvpn`** — a global flag on any command: if FortiClient isn't reachable, start it
+  headless with the debug port enabled, wait for it to come up, and then run the command.
+
+If nothing is listening on the debug port and you did *not* pass `--start-fvpn`, every
+command fails fast with exit code `3` and tells you exactly how to start it.
+
+```console
+$ fvpnctl --start-fvpn connect office
+FortiClient is not reachable on 127.0.0.1:9222; starting it headless with debugging enabled (--start-fvpn)…
+Launching FortiClient headless: /Applications/FortiClient.app/Contents/MacOS/FortiClient --hide-gui --remote-debugging-port=9222
+Waiting up to 20s for FortiClient CDP on 127.0.0.1:9222…
+FortiClient debug port is up on 127.0.0.1:9222.
+CONNECTED office 172.16.200.2
+```
 
 The recommended launch is either `fvpnctl startserver` or, equivalently, by hand:
 
@@ -188,7 +202,7 @@ If the item is missing or access is denied, `connect` fails with exit code `4`
 ## Usage
 
 ```
-fvpnctl [--port N] [--host H] <command> ...
+fvpnctl [--port N] [--host H] [--start-fvpn] <command> ...
 ```
 
 Global options:
@@ -197,6 +211,11 @@ Global options:
   environment variable. Must match the `--remote-debugging-port` FortiClient was launched
   with.
 - `--host H` — debug host (default `127.0.0.1`).
+- `--start-fvpn` — if FortiClient isn't reachable on the debug port, launch it headless
+  (exactly as `startserver` does), wait for it to finish starting, and then run the command,
+  instead of failing with exit `3` and instructions. Inert when FortiClient is already up, so
+  it is safe to leave on permanently (e.g. `alias fvpn='fvpnctl --start-fvpn'`). If
+  FortiClient is not installed it still exits `8` with a download hint.
 - `--verbose` / `--quiet` — progress messages. Verbose is **on by default** and writes
   progress to **stderr**; `--quiet` silences it. Either way `stdout` carries only the
   machine-readable result, so `--json` output and shell pipelines are byte-identical.
@@ -376,8 +395,9 @@ $ fvpnctl startserver
 FortiClient debug port ready on 127.0.0.1:9222
 ```
 
-Use it for ad-hoc sessions; for a permanent setup prefer the LaunchAgent above. FortiClient
-is single-instance: if an ordinary tray-GUI FortiClient is already running, quit it first —
+Use it for ad-hoc sessions; for a permanent setup prefer the LaunchAgent above, and to just
+start FortiClient on demand as part of another command use `--start-fvpn`. FortiClient is
+single-instance: if an ordinary tray-GUI FortiClient is already running, quit it first —
 starting a second instance just forwards its arguments to the first, which won't open the
 debug port.
 
@@ -399,7 +419,7 @@ match [`src/fvpnctl/errors.py`](./src/fvpnctl/errors.py).
 | `5` | Unsupported in v1 — SSL profile or 2FA/XAUTH required (`UnsupportedError`) |
 | `6` | Connect failed (negotiated then dropped) or an internal call to FortiClient failed (`ConnectFailed` / `CDPEvaluateError`) |
 | `7` | Timed out waiting for CONNECTED, including never leaving DISCONNECTED (`ConnectTimeout`) |
-| `8` | FortiClient is not installed — `startserver` could not find the app (`FortiClientNotFoundError`) |
+| `8` | FortiClient is not installed — `startserver` / `--start-fvpn` could not find the app (`FortiClientNotFoundError`) |
 | `1` | Any other `FortiError` |
 
 ---
@@ -429,9 +449,10 @@ scope, with a clear error rather than a guess:
   raises `UnsupportedError("2FA not supported in v1")` (exit `5`) instead of prompting.
 - **No profile management.** No create / delete / rename / import — profiles are managed in
   FortiClient itself.
-- **No automatic lifecycle management.** Commands never auto-start, quit, or restart
-  FortiClient. The one explicit launcher is `fvpnctl startserver` (or install the LaunchAgent
-  above); the tool still never quits or restarts a *running* FortiClient.
+- **No automatic lifecycle management.** Commands never start, quit, or restart FortiClient
+  unless you ask them to: launching is opt-in via `fvpnctl startserver` or the `--start-fvpn`
+  flag (or the LaunchAgent above). The tool never quits or restarts a *running* FortiClient
+  at all.
 - **No default profile / config file.** The profile name is always passed explicitly.
 
 For more on how it works, see [`docs/how-it-works.md`](./docs/how-it-works.md).

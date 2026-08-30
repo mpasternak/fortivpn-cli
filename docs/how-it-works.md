@@ -6,10 +6,11 @@ to do the work, and reports the result back to your terminal.
 
 ## The model
 
-- **You run FortiClient.** You launch it yourself so that it exposes a local debugging port
+- **You run FortiClient.** It must expose a local debugging port
   (`--remote-debugging-port`), the same kind of local interface many desktop apps offer. This
-  is off in the normal tray-GUI mode, so you opt into it explicitly (see the README's Setup
-  section, or use `fvpnctl startserver`).
+  is off in the normal tray-GUI mode, so you opt into it explicitly — by launching it that way
+  yourself (see the README's Setup section), by running `fvpnctl startserver`, or by adding
+  `--start-fvpn` to a command so it starts FortiClient on demand.
 - **`fvpnctl` attaches and asks.** It connects to that local port and asks FortiClient to
   bring a profile up or down and to report its current state. There is no clicking, no
   Accessibility automation, and no reimplementation of the tunnel — FortiClient and its
@@ -47,7 +48,7 @@ FortiClient shows its main window on a successful connect, even when it was laun
 quitting the app — unless you pass `--show-window`. This is best-effort: if it can't hide the
 window, your connection is still up and the command still succeeds.
 
-## Launching FortiClient (`startserver`) and the single-instance caveat
+## Launching FortiClient (`startserver` / `--start-fvpn`) and the single-instance caveat
 
 FortiClient is a single-instance application: it can only run once. Running it headless with
 the debugging port therefore means you are **not** also running the ordinary tray-GUI
@@ -58,6 +59,16 @@ headless instance.
 `fvpnctl startserver` launches FortiClient headless with the debugging port enabled. It is
 idempotent — if the port is already answering, it does nothing — and if FortiClient isn't
 installed it exits with a clear download hint.
+
+The global `--start-fvpn` flag does the same launch inline, from any command: if the attach
+fails because nothing is listening, it starts FortiClient, waits for it, and then runs the
+command you asked for. The wait is in two stages, because the debugging port answers before
+FortiClient is actually usable: first for a debuggable page target to appear, then for that
+page's `window.guimessenger` to exist. Skipping the second stage is not theoretical — an
+evaluate issued about a second after the port opened came back
+`Execution context was destroyed`, because Electron was still swapping in the real page. If
+the renderer is not ready within 30s, the command fails with exit `3` rather than reporting a
+confusing evaluate error.
 
 ## Credentials and the Keychain convention
 
@@ -76,8 +87,9 @@ The *service* name (`-s`) is `forti-vpn-` followed by the exact profile name, an
 
 - **IPsec profiles, no 2FA** are the supported, validated case. An SSL profile or a profile
   that requires a token/OTP is rejected with a clear "unsupported" error rather than a guess.
-- **Attach-only by default.** No command auto-starts, quits, or restarts FortiClient; the one
-  explicit launcher is `startserver`. The tool never tears down a running FortiClient.
+- **Attach-only by default.** No command starts, quits, or restarts FortiClient unless you
+  ask it to; launching is opt-in via `startserver` or `--start-fvpn`. The tool never tears
+  down a running FortiClient.
 - **Don't trust `DevToolsActivePort`.** The file
   `~/Library/Application Support/FortiClient/DevToolsActivePort` can be stale; `fvpnctl`
   checks the live port instead of relying on it.

@@ -13,14 +13,22 @@ translation. See design spec sections 4.5 and 5.
 
 Why attach-only
 ---------------
-The tool never starts, stops, or restarts FortiClient. It connects to a
-FortiClient the user already launched headless with ``--remote-debugging-port``
-(see docs/how-it-works.md section 1). If the debugging port is unreachable,
-``CDPSession`` raises :class:`~fvpnctl.errors.NotRunningError`; the CLI surfaces
-the factual message as a stderr line + exit code 3 and then prints actionable
-guidance (suggesting ``fvpnctl startserver`` or the exact launch command). The one
-exception to attach-only is the explicit ``startserver`` subcommand, which uses
-``launcher`` to start FortiClient headless — see :func:`_cmd_startserver`.
+The tool never starts, stops, or restarts FortiClient *on its own*. It connects
+to a FortiClient the user already launched headless with
+``--remote-debugging-port`` (see docs/how-it-works.md section 1). If the debugging
+port is unreachable, ``CDPSession`` raises
+:class:`~fvpnctl.errors.NotRunningError`; the CLI surfaces the factual message as
+a stderr line + exit code 3 and then prints actionable guidance (``fvpnctl
+startserver``, ``--start-fvpn``, or the exact launch command).
+
+Both exceptions to attach-only are *explicit user opt-ins*:
+
+* the ``startserver`` subcommand, whose whole job is launching — see
+  :func:`_cmd_startserver`;
+* the global ``--start-fvpn`` flag, which turns the "FortiClient is not running"
+  message into an action: launch it headless with debugging enabled, then retry
+  the attach and run the command — see :func:`_run_command`. Without the flag
+  nothing is ever launched behind the user's back.
 
 The type → exit-code contract
 -----------------------------
@@ -79,6 +87,26 @@ _DISCONNECTED = 0
 # Connection type for v1. Only IPsec is supported (SSL is out of scope); the CLI
 # always queries/derives with this type. See design spec section 2.
 _IPSEC = "ipsec"
+
+# How long ``--start-fvpn`` waits for FortiClient's debug port after launching it.
+# Longer than ``startserver``'s 10s default because this launch is on the critical
+# path of the user's actual command (a cold FortiClient start is slower than a
+# warm one, and here the whole command fails if we give up too early).
+_AUTOSTART_WAIT = 20.0
+
+# After ``launcher.start_server`` reports the port open, how long (and how often)
+# to keep retrying the attach + readiness probe. ``start_server`` only waits for
+# ``/json/version``, which answers well before FortiClient is usable, so a single
+# immediate attach fails spuriously. See :func:`_attach_after_launch`.
+_POST_LAUNCH_WINDOW = 30.0
+_POST_LAUNCH_POLL = 0.5
+
+# The cheapest "is the renderer actually usable?" probe. Every command goes
+# through ``window.guimessenger``, so its presence is exactly the precondition
+# they all need — and nothing else distinguishes FortiClient's real page from the
+# blank/loading one it briefly exposes on startup. Synchronous (no promise to
+# await) and side-effect free. See :func:`_renderer_ready`.
+_READY_PROBE = "typeof window.guimessenger"
 
 # Verbosity flag toggled by ``main`` from ``--verbose``/``--quiet``. Module-level
 # (rather than threaded through every call) so ``report`` can be passed straight
@@ -144,13 +172,27 @@ def _build_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="Silence stderr progress (wins over --verbose). stdout is unchanged.",
     )
+    # Opt-in escape from the attach-only default: launch FortiClient ourselves
+    # rather than printing "it is not running" and exiting 3. SUPPRESS for the
+    # same parents-parser reason as the flags above; main() defaults it to False.
+    common.add_argument(
+        "--start-fvpn",
+        dest="start_fvpn",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=(
+            "If FortiClient is not running, launch it headless with the debug port "
+            "enabled and retry, instead of failing with instructions."
+        ),
+    )
 
     parser = argparse.ArgumentParser(
         prog="fvpnctl",
         parents=[common],
         description=(
             "Control an already-running FortiClient IPsec VPN over the Chrome "
-            "DevTools Protocol (attach-only; the one exception is `startserver`)."
+            "DevTools Protocol. Attach-only: nothing is launched unless you ask "
+            "for it with `startserver` or the global --start-fvpn flag."
         ),
     )
 
@@ -551,6 +593,143 @@ def _cmd_startserver(args: argparse.Namespace) -> int:
     return 0
 
 
+def _attach(port: int, host: str) -> CDPSession:
+    """Open an attach-only :class:`CDPSession` to ``host:port``, or raise.
+
+    Split out of :func:`_run_command` so a *failed attach* ("FortiClient is not
+    running") can be told apart from a ``NotRunningError`` raised later, while the
+    command itself runs — only the former is worth relaunching FortiClient for.
+
+    On failure the half-built session is closed before the error propagates: a
+    WebSocket handshake can fail after the TCP socket is already open, and with
+    the retry loop in :func:`_attach_after_launch` a leaked socket per attempt
+    would add up.
+
+    :raises NotRunningError: FortiClient's CDP endpoint is unreachable or exposes
+        no debuggable page target.
+    """
+    session = CDPSession(port, host)
+    try:
+        session.connect()
+    except NotRunningError:
+        session.close()
+        raise
+    return session
+
+
+def _start_fvpn(host: str, port: int) -> None:
+    """``--start-fvpn``: launch FortiClient headless with debugging enabled.
+
+    The same :func:`launcher.start_server` the ``startserver`` subcommand uses,
+    with a longer :data:`_AUTOSTART_WAIT` because this launch sits on the critical
+    path of the command the user actually asked for. Progress (and any
+    single-instance diagnosis from the launcher) flows through :func:`report`.
+
+    :raises FortiClientNotFoundError: FortiClient is not installed (exit 8).
+    :raises FortiError: launched, but the debug port never opened (exit 1).
+    """
+    report(
+        f"FortiClient is not reachable on {host}:{port}; "
+        "starting it headless with debugging enabled (--start-fvpn)…"
+    )
+    launcher.start_server(host, port, wait=_AUTOSTART_WAIT, on_info=report)
+
+
+def _renderer_ready(session: CDPSession) -> bool:
+    """Return ``True`` iff ``window.guimessenger`` is live in the attached target.
+
+    A freshly launched FortiClient exposes a debuggable page *before* it is
+    usable: the target is there, but the execution context behind it is still
+    being torn down and rebuilt as Electron swaps in the real ``base.html``. An
+    evaluate against it fails with ``Execution context was destroyed`` — which is
+    what ``fvpnctl --start-fvpn list`` hit in practice, ~1s after the debug port
+    opened.
+
+    A :class:`~fvpnctl.errors.CDPEvaluateError` here is therefore the *expected*
+    "not ready yet" answer to a yes/no question, not an error to propagate, so it
+    is deliberately mapped to ``False`` (narrow type, same contract as
+    :func:`launcher.cdp_reachable`). Anything else still propagates.
+    """
+    try:
+        return session.evaluate(_READY_PROBE, await_promise=False) == "object"
+    except CDPEvaluateError:
+        return False
+
+
+def _attach_after_launch(port: int, host: str) -> CDPSession:
+    """Attach to a just-launched FortiClient, waiting out the rest of its startup.
+
+    :func:`launcher.start_server` returns as soon as ``/json/version`` answers,
+    which is only the *first* of three things that must be true. Two more follow,
+    each with its own retry here:
+
+    1. a debuggable *page* target must register — until then the attach raises
+       ``NotRunningError``;
+    2. that target's renderer must finish loading FortiClient's real page —
+       until then :func:`_renderer_ready` is ``False`` and the session is
+       worthless, because the execution context it is bound to is about to be
+       destroyed. It is dropped and the target re-discovered on the next pass.
+
+    Polls every :data:`_POST_LAUNCH_POLL` seconds for up to
+    :data:`_POST_LAUNCH_WINDOW`, then raises ``NotRunningError`` (exit 3 plus the
+    usual guidance) rather than handing back a session the command would fail on.
+    Monotonic time so a wall-clock jump cannot skew the window; ``time`` is a
+    module attribute so tests can neutralise the sleep.
+    """
+    deadline = time.monotonic() + _POST_LAUNCH_WINDOW
+    announced = False
+    while True:
+        try:
+            session = _attach(port, host)
+        except NotRunningError:
+            # Debug port open, but no debuggable page target yet: normal while
+            # FortiClient boots. Wait it out, or let the error stand at the
+            # deadline — it already says exactly what could not be reached.
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(_POST_LAUNCH_POLL)
+            continue
+
+        if _renderer_ready(session):
+            return session
+
+        session.close()
+        if time.monotonic() >= deadline:
+            raise NotRunningError(
+                f"FortiClient started on {host}:{port}, but its renderer was still "
+                f"not ready after {_POST_LAUNCH_WINDOW:g}s (window.guimessenger "
+                "never appeared)."
+            )
+        if not announced:
+            report("FortiClient is up; waiting for its renderer to finish loading…")
+            announced = True
+        time.sleep(_POST_LAUNCH_POLL)
+
+
+def _run_command(args: argparse.Namespace) -> int:
+    """Attach to FortiClient and dispatch the subcommand; return its exit code.
+
+    The attach-only path is the plain one: open a session, hand a
+    :class:`FortiVPN` to ``args.func``, close on the way out. When the attach
+    fails and ``--start-fvpn`` was given, FortiClient is launched
+    (:func:`_start_fvpn`) and the attach retried (:func:`_attach_after_launch`)
+    before dispatching — so the command the user typed still runs. Without the
+    flag the ``NotRunningError`` propagates untouched to :func:`main`, which
+    prints the guidance.
+    """
+    report(f"Attaching to FortiClient CDP at {args.host}:{args.port}…")
+    try:
+        session = _attach(args.port, args.host)
+    except NotRunningError:
+        if not args.start_fvpn:
+            raise
+        _start_fvpn(args.host, args.port)
+        session = _attach_after_launch(args.port, args.host)
+
+    with session:
+        return args.func(FortiVPN(session), args)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse ``argv``, run the chosen subcommand, return the process exit code.
 
@@ -591,6 +770,7 @@ def main(argv: list[str] | None = None) -> int:
     _VERBOSE = getattr(args, "verbose", True)
     args.port = getattr(args, "port", int(os.environ.get("FORTI_CDP_PORT", "9222")))
     args.host = getattr(args, "host", "127.0.0.1")
+    args.start_fvpn = getattr(args, "start_fvpn", False)
 
     try:
         if args.command == "startserver":
@@ -599,17 +779,14 @@ def main(argv: list[str] | None = None) -> int:
             # here, before any CDPSession is opened.
             return _cmd_startserver(args)
 
-        report(f"Attaching to FortiClient CDP at {args.host}:{args.port}…")
-        with CDPSession(args.port, args.host) as session:
-            session.connect()
-            fvpnctl = FortiVPN(session)
-            return args.func(fvpnctl, args)
+        return _run_command(args)
     except NotRunningError as e:
-        # FortiClient's CDP endpoint is unreachable. The exception message is
-        # factual only (cdp.py keeps the transport decoupled); the CLI owns the
-        # actionable "how to fix it" guidance, printed to stderr below.
+        # FortiClient's CDP endpoint is unreachable — and either --start-fvpn was
+        # not given, or it was and the relaunch still did not bring the port up.
+        # The exception message is factual only (cdp.py keeps the transport
+        # decoupled); the CLI owns the actionable "how to fix it" guidance below.
         print(e, file=sys.stderr)
-        _print_not_running_guidance(args.port)
+        _print_not_running_guidance(args.port, start_fvpn=args.start_fvpn)
         return e.exit_code
     except FortiError as e:
         # Expected, user-facing failure: the type carries the exit code and the
@@ -623,11 +800,16 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
 
-def _print_not_running_guidance(port: int) -> None:
+def _print_not_running_guidance(port: int, *, start_fvpn: bool = False) -> None:
     """Print actionable "how to reach FortiClient" advice to stderr.
 
     Complements the factual :class:`~fvpnctl.errors.NotRunningError` message
-    (which only names the unreachable URL). Always suggests ``fvpnctl startserver``.
+    (which only names the unreachable URL). Always suggests ``fvpnctl
+    startserver``, and — unless the user already used it — points at
+    ``--start-fvpn`` as the one-shot "just launch it and carry on" fix. Passing
+    ``start_fvpn=True`` suppresses that line: we *did* try to launch FortiClient
+    and it still did not come up, so repeating the suggestion would be wrong.
+
     Then, if :func:`launcher.find_forticlient` locates the installed executable,
     it shows the exact manual launch command for users who prefer to run it
     themselves; if FortiClient is not installed at all, it shows
@@ -636,6 +818,11 @@ def _print_not_running_guidance(port: int) -> None:
     independent of verbosity — a hard error always explains how to recover.
     """
     print("To start it, run:  fvpnctl startserver", file=sys.stderr)
+    if not start_fvpn:
+        print(
+            "Or re-run the same command with --start-fvpn to launch it automatically.",
+            file=sys.stderr,
+        )
     exe = launcher.find_forticlient()
     if exe is not None:
         print(
