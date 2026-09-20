@@ -215,7 +215,8 @@ Global options:
   (exactly as `startserver` does), wait for it to finish starting, and then run the command,
   instead of failing with exit `3` and instructions. Inert when FortiClient is already up, so
   it is safe to leave on permanently (e.g. `alias fvpn='fvpnctl --start-fvpn'`). If
-  FortiClient is not installed it still exits `8` with a download hint.
+  FortiClient is not installed it still exits `8` with a download hint. `--start-vpn` is
+  accepted as an alias, since the missing `f` is an easy slip.
 - `--verbose` / `--quiet` — progress messages. Verbose is **on by default** and writes
   progress to **stderr**; `--quiet` silences it. Either way `stdout` carries only the
   machine-readable result, so `--json` output and shell pipelines are byte-identical.

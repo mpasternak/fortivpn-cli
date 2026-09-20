@@ -1096,3 +1096,27 @@ def test_renderer_ready_reports_false_instead_of_raising():
 
     FakeSession.evaluate_results = ["object"]
     assert cli._renderer_ready(FakeSession()) is True
+
+
+def test_start_vpn_is_accepted_as_an_alias_for_start_fvpn():
+    # "fvpn" vs "vpn" is an easy slip to make, and argparse's "unrecognized
+    # arguments" error gives no hint, so --start-vpn maps to the same flag.
+    parser = cli._build_parser()
+    assert parser.parse_args(["--start-vpn", "status"]).start_fvpn is True
+    assert parser.parse_args(["status", "--start-vpn"]).start_fvpn is True
+
+
+def test_start_vpn_alias_launches_forticlient(monkeypatch, capsys):
+    # The alias is not just parsed: it drives the same autostart path end to end.
+    fake = _FakeLauncher()
+    monkeypatch.setattr(cli, "launcher", fake)
+    FakeSession.connect_errors = [NotRunningError("cannot reach CDP endpoint")]
+    FakeController.config["state"] = FakeState(
+        ipsec_state=0, name="", state_label="DISCONNECTED", raw={"ipsec_state": 0}
+    )
+
+    rc = cli.main(["--start-vpn", "status"])
+
+    assert rc == 0
+    assert len(fake.calls) == 1
+    assert "DISCONNECTED" in capsys.readouterr().out

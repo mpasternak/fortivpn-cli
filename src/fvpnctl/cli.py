@@ -177,6 +177,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # same parents-parser reason as the flags above; main() defaults it to False.
     common.add_argument(
         "--start-fvpn",
+        # "fvpn" vs "vpn" is an easy slip, and argparse answers it with a bare
+        # "unrecognized arguments", so accept the shorter spelling too. Listed
+        # second so --help and the usage line advertise the canonical name.
+        "--start-vpn",
         dest="start_fvpn",
         action="store_true",
         default=argparse.SUPPRESS,
